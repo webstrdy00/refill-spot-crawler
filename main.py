@@ -140,12 +140,12 @@ def process_crawled_data(stores_data: List[Dict]) -> List[Dict]:
     return processed_stores
 
 def run_mvp_crawling():
-    """MVP 크롤링 실행 (PostGIS 버전)"""
+    """MVP 크롤링 실행 (지역별 키워드 사용)"""
     crawler = None
     db = None
     
     try:
-        logger.info("=== Refill Spot 크롤링 시작 (MVP - PostGIS) ===")
+        logger.info("=== Refill Spot 크롤링 시작 (MVP - 지역별 키워드) ===")
         
         # 크롤러 초기화
         crawler = DiningCodeCrawler()
@@ -160,22 +160,32 @@ def run_mvp_crawling():
         
         all_stores = []
         
-        # 기본 키워드로 크롤링
-        for keyword in config.KEYWORDS[:2]:  # MVP에서는 처음 2개만
+        # 지역별 키워드로 크롤링
+        region_name = config.REGIONS[config.TEST_REGION]["name"]
+        keywords = config.TEST_KEYWORDS
+        rect = config.TEST_RECT
+        
+        logger.info(f"=== {region_name} 지역 크롤링 시작 ===")
+        logger.info(f"사용할 키워드: {keywords}")
+        logger.info(f"검색 영역: {rect}")
+        
+        # 각 키워드별로 크롤링 (MVP에서는 처음 2개만)
+        for keyword in keywords[:2]:  # MVP에서는 처음 2개 키워드만
             logger.info(f"키워드 '{keyword}' 크롤링 시작")
             
             # 목록 수집
-            stores = crawler.get_store_list(keyword, config.TEST_RECT)
+            stores = crawler.get_store_list(keyword, rect)
             logger.info(f"키워드 '{keyword}': {len(stores)}개 가게 발견")
             
             if not stores:
+                logger.warning(f"키워드 '{keyword}'로 검색된 가게가 없습니다. 다른 키워드를 시도해보세요.")
                 continue
             
-            # 상세 정보 수집 (MVP에서는 처음 5개만)
+            # 상세 정보 수집 (MVP에서는 처음 3개만)
             detailed_stores = []
-            for i, store in enumerate(stores[:5]):  
+            for i, store in enumerate(stores[:3]):  
                 try:
-                    logger.info(f"상세 정보 수집 {i+1}/{min(5, len(stores))}: {store.get('name')}")
+                    logger.info(f"상세 정보 수집 {i+1}/{min(3, len(stores))}: {store.get('name')}")
                     detailed_store = crawler.get_store_detail(store)
                     detailed_stores.append(detailed_store)
                     
@@ -184,9 +194,16 @@ def run_mvp_crawling():
                     continue
             
             all_stores.extend(detailed_stores)
+            
+            # 키워드별 결과 요약
+            logger.info(f"키워드 '{keyword}' 완료: {len(detailed_stores)}개 가게 상세 정보 수집")
         
         if not all_stores:
             logger.warning("수집된 데이터가 없습니다")
+            logger.info("다음을 확인해보세요:")
+            logger.info("1. 다이닝코드 사이트 접속 가능 여부")
+            logger.info("2. ChromeDriver 정상 동작 여부") 
+            logger.info("3. 네트워크 연결 상태")
             return
         
         # 데이터 정제
@@ -201,12 +218,13 @@ def run_mvp_crawling():
         df.to_csv('mvp_crawling_result.csv', index=False, encoding='utf-8-sig')
         logger.info(f"CSV 저장 완료: mvp_crawling_result.csv ({len(processed_stores)}개 가게)")
         
-        # 데이터베이스 저장 (키워드와 rect 정보 포함)
-        db.save_crawled_data(processed_stores, keyword="무한리필", rect_area=config.TEST_RECT)
+        # 데이터베이스 저장 (지역명과 rect 정보 포함)
+        db.save_crawled_data(processed_stores, keyword=region_name, rect_area=rect)
         logger.info("데이터베이스 저장 완료")
         
         # 결과 요약
         logger.info("=== 크롤링 결과 요약 ===")
+        logger.info(f"검색 지역: {region_name}")
         logger.info(f"총 수집 가게 수: {len(processed_stores)}")
         logger.info(f"좌표 있는 가게: {sum(1 for s in processed_stores if s['position_lat'])}")
         logger.info(f"전화번호 있는 가게: {sum(1 for s in processed_stores if s['phone_number'])}")
@@ -246,20 +264,31 @@ def run_mvp_crawling():
         logger.info("=== 크롤링 완료 ===")
 
 def test_single_store():
-    """단일 가게 테스트"""
+    """단일 가게 테스트 (지역별 키워드 사용)"""
     crawler = None
     
     try:
-        logger.info("=== 단일 가게 테스트 ===")
+        logger.info("=== 단일 가게 테스트 (지역별 키워드) ===")
         crawler = DiningCodeCrawler()
         
+        # 첫 번째 지역 키워드로 테스트
+        test_keyword = config.TEST_KEYWORDS[0]
+        test_rect = config.TEST_RECT
+        
+        logger.info(f"테스트 키워드: {test_keyword}")
+        logger.info(f"테스트 영역: {test_rect}")
+        
         # 목록에서 첫 번째 가게만
-        stores = crawler.get_store_list("무한리필", config.TEST_RECT)
+        stores = crawler.get_store_list(test_keyword, test_rect)
+        logger.info(f"검색 결과: {len(stores)}개 가게 발견")
+        
         if stores:
             first_store = stores[0]
+            logger.info(f"첫 번째 가게: {first_store.get('name')}")
+            
             detailed_store = crawler.get_store_detail(first_store)
             
-            logger.info("=== 테스트 결과 ===")
+            logger.info("=== 크롤링 결과 ===")
             for key, value in detailed_store.items():
                 logger.info(f"{key}: {value}")
                 
@@ -269,9 +298,66 @@ def test_single_store():
                 logger.info("=== 정제된 데이터 ===")
                 for key, value in processed[0].items():
                     logger.info(f"{key}: {value}")
+        else:
+            logger.warning("검색 결과가 없습니다")
+            logger.info("다른 키워드를 시도해보세요:")
+            for i, keyword in enumerate(config.TEST_KEYWORDS):
+                logger.info(f"  {i+1}. {keyword}")
                     
     except Exception as e:
         logger.error(f"단일 가게 테스트 실패: {e}")
+    finally:
+        if crawler:
+            crawler.close()
+
+def test_all_keywords():
+    """모든 키워드 테스트 (검색 결과 수만 확인)"""
+    crawler = None
+    
+    try:
+        logger.info("=== 모든 키워드 테스트 ===")
+        crawler = DiningCodeCrawler()
+        
+        region_name = config.REGIONS[config.TEST_REGION]["name"]
+        keywords = config.TEST_KEYWORDS
+        rect = config.TEST_RECT
+        
+        logger.info(f"테스트 지역: {region_name}")
+        logger.info(f"테스트 영역: {rect}")
+        
+        results = []
+        for keyword in keywords:
+            try:
+                logger.info(f"키워드 '{keyword}' 테스트 중...")
+                stores = crawler.get_store_list(keyword, rect)
+                count = len(stores)
+                results.append((keyword, count))
+                logger.info(f"  결과: {count}개 가게 발견")
+                
+                if count > 0:
+                    # 첫 번째 가게 이름 출력
+                    first_store_name = stores[0].get('name', 'Unknown')
+                    logger.info(f"  첫 번째 가게: {first_store_name}")
+                
+            except Exception as e:
+                logger.error(f"키워드 '{keyword}' 테스트 실패: {e}")
+                results.append((keyword, 0))
+        
+        logger.info("=== 키워드별 검색 결과 요약 ===")
+        total_found = 0
+        for keyword, count in results:
+            logger.info(f"{keyword}: {count}개")
+            total_found += count
+        
+        logger.info(f"총 발견된 가게 수: {total_found}개")
+        
+        # 가장 많이 찾은 키워드 추천
+        if results:
+            best_keyword = max(results, key=lambda x: x[1])
+            logger.info(f"추천 키워드: '{best_keyword[0]}' ({best_keyword[1]}개 가게)")
+            
+    except Exception as e:
+        logger.error(f"키워드 테스트 실패: {e}")
     finally:
         if crawler:
             crawler.close()
@@ -331,13 +417,20 @@ if __name__ == "__main__":
             test_single_store()
         elif sys.argv[1] == "db":
             test_database_only()
+        elif sys.argv[1] == "keywords":
+            test_all_keywords()
         elif sys.argv[1] == "full":
             run_mvp_crawling()
         else:
-            print("사용법: python main.py [test|db|full]")
+            print("사용법: python main.py [test|db|keywords|full]")
             print("  test: 단일 가게 크롤링 테스트")
-            print("  db: 데이터베이스 기능 테스트")  
+            print("  db: 데이터베이스 기능 테스트")
+            print("  keywords: 모든 키워드 검색 결과 테스트")
             print("  full: 전체 MVP 크롤링 실행")
+            print("")
+            print("현재 설정:")
+            print(f"  지역: {config.REGIONS[config.TEST_REGION]['name']}")
+            print(f"  키워드: {config.TEST_KEYWORDS}")
     else:
         run_mvp_crawling()
 

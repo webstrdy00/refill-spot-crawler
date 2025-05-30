@@ -1,4 +1,3 @@
-
 import time
 import random
 import logging
@@ -37,8 +36,16 @@ class DiningCodeCrawler:
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--disable-plugins')
+        chrome_options.add_argument('--disable-images')  # 이미지 로딩 비활성화로 속도 향상
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # 페이지 로드 전략 설정
+        chrome_options.add_argument('--page-load-strategy=normal')
         
         # User-Agent 랜덤 설정
         user_agent = random.choice(config.USER_AGENTS)
@@ -46,8 +53,11 @@ class DiningCodeCrawler:
         
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
+            # 타임아웃 설정 증가
+            self.driver.set_page_load_timeout(30)
+            self.driver.implicitly_wait(10)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            self.wait = WebDriverWait(self.driver, 10)
+            self.wait = WebDriverWait(self.driver, 20)  # 대기 시간 증가
             logger.info("WebDriver 초기화 완료")
         except Exception as e:
             logger.error(f"WebDriver 초기화 실패: {e}")
