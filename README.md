@@ -1,84 +1,123 @@
-Refill Spot 크롤러 (1단계 MVP - PostGIS 버전)
-다이닝코드에서 무한리필 가게 정보를 수집하는 Python 크롤링 프로그램입니다.
-기존 프로젝트의 PostGIS 기반 스키마와 완전 호환됩니다.
-🚀 빠른 시작
+# 다이닝코드 무한리필 크롤러 (개선 버전)
 
-1. 자동 설정 (추천)
-   bash# 실행 권한 부여 후 자동 설정
-   chmod +x setup.sh
-   ./setup.sh
-2. 수동 설정
-   bash# Python 3.12 가상환경 생성
-   python3 -m venv venv
-   source venv/bin/activate # Windows: venv\Scripts\activate
+다이닝코드 웹사이트에서 무한리필 가게 정보를 수집하는 Python 크롤링 프로그램입니다.
 
-# 의존성 설치
+## 🚀 빠른 시작
 
+### 1. 가상환경 설정 (Windows)
+
+```bash
+# 자동 설정 스크립트 실행 (추천)
+setup_venv.bat
+
+# 또는 수동 설정
+python -m venv venv
+venv\Scripts\activate
 pip install -r requirements.txt
+```
 
-# Docker로 PostGIS 지원 PostgreSQL 시작
+### 2. 가상환경 설정 (Linux/Mac)
 
-docker-compose up -d postgres
+```bash
+# 자동 설정
+chmod +x setup.sh
+./setup.sh
 
-# 환경변수 설정
+# 또는 수동 설정
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-cp .env.example .env
+### 3. 크롤링 테스트
 
-# .env 파일 수정 (기본값으로도 동작함)
+```bash
+# 가상환경 활성화 후
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
 
-3. 환경 테스트
-   bash# 전체 환경 검증
-   python test_connection.py
+# 개선된 크롤러 테스트 (추천)
+python test_improved_crawler.py
 
-# 데이터베이스만 테스트
+# 단일 가게 상세 테스트
+python test_improved_crawler.py single
 
-python main.py db 4. 크롤링 실행
-bash# 키워드 검색 결과 테스트 (추천)
-python main.py keywords
+# 기존 간단한 테스트
+python test_simple_crawler.py
+```
 
-# 단일 가게 테스트
+## 🔧 주요 개선사항
 
-python main.py test
+### 크롤링 성능 개선
 
-# 전체 MVP 크롤링 실행
+- **다중 선택자 지원**: 여러 CSS 선택자로 정보 추출 시도
+- **강화된 좌표 추출**: JavaScript 변수에서 위도/경도 정확히 추출
+- **개선된 주소 파싱**: 한국 주소 패턴 인식 강화
+- **전화번호 정규화**: 다양한 형식의 전화번호 추출
+- **에러 처리 강화**: 상세한 오류 로그 및 복구 로직
 
-python main.py full
+### 데이터 품질 향상
 
-# 또는
+- **품질 점수 시스템**: 수집된 데이터의 완성도 평가
+- **무한리필 관련성 검증**: 키워드 기반 관련성 자동 체크
+- **중복 제거**: 동일 가게 중복 수집 방지
+- **데이터 검증**: 좌표 범위, 전화번호 형식 등 유효성 검사
 
-python main.py
-🎯 지역별 키워드 시스템
-왜 지역별 키워드가 필요한가?
+## 📊 테스트 결과 분석
+
+### 데이터 품질 지표
+
+- 좌표 정보 수집률
+- 주소 정보 수집률
+- 전화번호 수집률
+- 카테고리 정보 수집률
+- 이미지 수집률
+- 무한리필 관련성 비율
+
+### 결과 파일
+
+- `improved_crawler_test_YYYYMMDD_HHMMSS.json`: 전체 테스트 결과
+- `single_store_test.json`: 단일 가게 상세 테스트 결과
+- `test_improved_crawler.log`: 상세 실행 로그
+
+## 🎯 지역별 키워드 시스템
+
+### 왜 지역별 키워드가 필요한가?
+
 다이닝코드에서는 "무한리필"만 검색하면 결과가 잘 나오지 않습니다.
 "서울 강남 무한리필" 처럼 지역명을 포함해야 정확한 검색 결과를 얻을 수 있습니다.
-지원 지역 및 키워드
-python# config.py에서 설정
+
+### 지원 지역 및 키워드
+
+```python
+# config.py에서 설정
 REGIONS = {
-"강남": {
-"name": "서울 강남",
-"keywords": [
-"서울 강남 무한리필",
-"강남 고기무한리필",
-"강남 소고기무한리필",
-"강남 삼겹살무한리필",
-"강남 뷔페",
-"강남역 무한리필"
-]
+    "강남": {
+        "name": "서울 강남",
+        "keywords": [
+            "서울 강남 무한리필",
+            "강남 고기무한리필",
+            "강남 소고기무한리필",
+            "강남 삼겹살무한리필",
+            "강남 뷔페",
+            "강남역 무한리필"
+        ]
+    }
 }
-}
-키워드 테스트
-bash# 모든 키워드의 검색 결과 수 확인
+```
+
+### 키워드 테스트
+
+```bash
+# 모든 키워드의 검색 결과 수 확인
 python main.py keywords
 
 # 결과 예시:
-
 # 서울 강남 무한리필: 15개
-
 # 강남 고기무한리필: 8개
-
 # 강남 삼겹살무한리필: 12개
-
 # 추천 키워드: '서울 강남 무한리필' (15개 가게)
+```
 
 🗺️ PostGIS 기능
 공간 데이터 처리
@@ -559,166 +598,4 @@ crawler.log: 크롤링 상세 로그
 ✅ 네트워크 연결 상태
 ✅ 다이닝코드 사이트 접근 가능성
 
-이제 크롤링을 시작해보세요! 🎉# Refill Spot 크롤러 (1단계 MVP)
-다이닝코드에서 무한리필 가게 정보를 수집하는 Python 크롤링 프로그램입니다.
-🚀 빠른 시작
-
-1. 자동 설정 (추천)
-   bash# 실행 권한 부여 후 자동 설정
-   chmod +x setup.sh
-   ./setup.sh
-2. 수동 설정
-   bash# Python 3.12 가상환경 생성
-   python3 -m venv venv
-   source venv/bin/activate # Windows: venv\Scripts\activate
-
-# 의존성 설치
-
-pip install -r requirements.txt
-
-# Docker로 PostgreSQL 시작
-
-docker-compose up -d postgres
-
-# 환경변수 설정
-
-cp .env.example .env
-
-# .env 파일 수정 (기본값으로도 동작함)
-
-3. ChromeDriver 설치
-   macOS (Homebrew):
-   bashbrew install chromedriver
-   Ubuntu/Debian:
-   bashsudo apt-get install chromium-chromedriver
-   Windows:
-
-ChromeDriver 다운로드
-PATH에 추가하거나 프로젝트 폴더에 배치
-
-4. 실행
-   bash# 데이터베이스 연결 테스트
-   python -c "from database import DatabaseManager; db = DatabaseManager(); db.test_connection(); db.close()"
-
-# 단일 가게 테스트
-
-python main.py test
-
-# 전체 MVP 크롤링 실행
-
-python main.py
-🐳 Docker 관리
-bash# PostgreSQL 시작
-docker-compose up -d postgres
-
-# pgAdmin 시작 (웹 관리도구)
-
-docker-compose up -d pgadmin
-
-# 접속: http://localhost:5050
-
-# 이메일: admin@example.com, 비밀번호: admin123
-
-# 모든 서비스 종료
-
-docker-compose down
-
-# 데이터까지 완전 삭제
-
-docker-compose down -v
-📁 파일 구조
-refill-spot-crawler/
-├── requirements.txt # Python 3.12 호환 의존성
-├── config.py # 설정 파일 (Docker 환경)
-├── crawler.py # 크롤링 로직
-├── database.py # PostgreSQL 전용 처리
-├── main.py # 메인 실행 스크립트
-├── docker-compose.yml # PostgreSQL + pgAdmin
-├── init.sql # 데이터베이스 초기 스키마
-├── setup.sh # 자동 설정 스크립트
-├── .env.example # 환경변수 예시
-└── README.md # 이 파일
-🔧 환경설정
-.env 파일 (Docker 기본값)
-bashDB_HOST=localhost
-DB_PORT=5432
-DB_NAME=refill_spot
-DB_USER=postgres
-DB_PASSWORD=password123
-config.py 주요 설정
-
-TEST_RECT: 테스트용 강남구 좌표 범위
-KEYWORDS: 검색 키워드 목록
-MIN_DELAY, MAX_DELAY: 크롤링 지연 시간 (3-5초)
-
-📊 데이터베이스 스키마
-stores 테이블 (메인)
-
-diningcode_place_id: 다이닝코드 가게 ID (유니크 키)
-name: 가게 이름
-address: 주소
-position_lat, position_lng: 위도, 경도
-phone_number: 전화번호
-diningcode_rating: 다이닝코드 평점
-raw_categories_diningcode: 원본 카테고리 태그 배열
-status: 운영 상태 ('운영중', '휴업', '폐업')
-
-categories 테이블
-
-기본 카테고리들이 자동으로 삽입됨 (무한리필, 한식, 중식 등)
-
-store_categories 테이블
-
-가게와 카테고리 다대다 연결
-
-🎯 크롤링 결과
-bash# 결과 파일들
-mvp_crawling_result.csv # 크롤링된 데이터 CSV
-crawler.log # 크롤링 로그
-refill_spot_crawler.log # 메인 프로세스 로그
-🐛 트러블슈팅
-Docker PostgreSQL 연결 오류
-bash# 컨테이너 상태 확인
-docker-compose ps
-
-# 로그 확인
-
-docker-compose logs postgres
-
-# 포트 충돌 시 (5432 포트가 이미 사용중)
-
-docker-compose down
-sudo service postgresql stop # 기존 PostgreSQL 중지
-docker-compose up -d postgres
-ChromeDriver 오류
-bash# Chrome과 ChromeDriver 버전 확인
-google-chrome --version
-chromedriver --version
-
-# 버전이 맞지 않으면 ChromeDriver 업데이트
-
-Python 3.12 호환성
-
-모든 패키지가 Python 3.12와 호환되도록 버전 조정됨
-특별한 추가 설정 불필요
-
-📝 로그 확인
-bash# 실시간 로그 확인
-tail -f refill_spot_crawler.log
-
-# Docker 로그
-
-docker-compose logs -f postgres
-🎯 다음 단계 (2단계)
-
-더 많은 지역 추가: 서울 전체, 부산, 대구 등
-상세 정보 강화: 메뉴, 가격, 영업시간 파싱 추가
-성능 최적화: 병렬 처리, 배치 크기 조정
-모니터링: 크롤링 성공률, 데이터 품질 검증
-
-⚠️ 주의사항
-
-Python 3.12 사용: 최신 버전 호환성 확보
-Docker 환경: Supabase 대신 로컬 PostgreSQL 사용
-robots.txt 준수: 3-5초 지연으로 과도한 요청 방지
-개인정보 보호: 수집된 데이터 적절한 관리
+이제 크롤링을 시작해보세요! 🎉

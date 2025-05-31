@@ -31,6 +31,8 @@ MANIFEST
 # 로그 파일
 *.log
 logs/
+data/
 
 # IDE 관련 파일
 .vscode/
+.cursor/
