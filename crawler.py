@@ -2,6 +2,8 @@ import time
 import random
 import logging
 import os
+import re
+import json
 from typing import List, Dict, Optional
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -13,7 +15,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from bs4 import BeautifulSoup
 import pandas as pd
 import config
-import re
+
 
 # 로깅 설정
 logging.basicConfig(
@@ -68,11 +70,27 @@ class DiningCodeCrawler:
             logger.error(f"WebDriver 초기화 실패: {e}")
             raise
     
-    def random_delay(self):
-        """랜덤 지연"""
-        delay = random.uniform(config.MIN_DELAY, config.MAX_DELAY)
+    def random_delay(self, min_delay=None, max_delay=None):
+        """랜덤 지연 (재시도 로직에서 사용할 수 있도록 파라미터 추가)"""
+        min_d = min_delay or config.MIN_DELAY
+        max_d = max_delay or config.MAX_DELAY
+        delay = random.uniform(min_d, max_d)
         time.sleep(delay)
         
+    def retry_on_failure(self, func, max_retries=3, delay_multiplier=1.5):
+        """실패 시 재시도 로직"""
+        for attempt in range(max_retries):
+            try:
+                return func()
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"최대 재시도 횟수 초과: {e}")
+                    raise
+                else:
+                    wait_time = (attempt + 1) * delay_multiplier
+                    logger.warning(f"시도 {attempt + 1} 실패: {e}. {wait_time}초 후 재시도...")
+                    time.sleep(wait_time)
+
     def get_store_list(self, keyword: str, rect: str) -> List[Dict]:
         """다이닝코드에서 가게 목록 수집 (두 번 시도 방식)"""
         stores = []
@@ -317,200 +335,413 @@ class DiningCodeCrawler:
         return stores
     
     def get_store_detail(self, store_info: Dict) -> Dict:
-        """가게 상세 정보 수집"""
-        detail_url = store_info['detail_url']
-        if not detail_url.startswith('http'):
-            detail_url = f"https://www.diningcode.com{detail_url}"
-            
+        """가게 상세 정보 수집 (강화된 파싱)"""
+        def _get_detail():
+            return self._extract_store_detail(store_info)
+        
+        return self.retry_on_failure(_get_detail, max_retries=3)
+
+    def _extract_store_detail(self, store_info: Dict) -> Dict:
+        """실제 상세 정보 추출 로직"""
+        detail_info = store_info.copy()
+        
         try:
-            logger.info(f"상세 페이지 크롤링: {store_info['name']}")
+            place_id = store_info.get('diningcode_place_id', '')
+            if not place_id:
+                logger.warning("place_id가 없어 상세 정보를 가져올 수 없습니다.")
+                return detail_info
+            
+            # 상세 페이지 URL 생성
+            detail_url = f"https://www.diningcode.com/profile.php?rid={place_id}"
+            logger.info(f"상세 페이지 접속: {detail_url}")
+            
             self.driver.get(detail_url)
             self.random_delay()
             
             # 페이지 로딩 대기
-            self.wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(5)  # 추가 로딩 시간
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "restaurant-detail"))
+                )
+            except TimeoutException:
+                logger.warning("상세 페이지 로딩 타임아웃")
+                time.sleep(3)
             
-            # 페이지 소스에서 좌표 정보 추출
-            page_source = self.driver.page_source
-            
-            lat = lng = None
-            
-            # 좌표 패턴 매칭
-            lat_patterns = [
-                r'"lat":\s*([0-9.]+)',
-                r'"latitude":\s*([0-9.]+)',
-                r'lat:\s*([0-9.]+)',
-                r'latitude:\s*([0-9.]+)'
-            ]
-            
-            lng_patterns = [
-                r'"lng":\s*([0-9.]+)',
-                r'"longitude":\s*([0-9.]+)',
-                r'lng:\s*([0-9.]+)',
-                r'longitude:\s*([0-9.]+)'
-            ]
-            
-            # 위도 찾기
-            for pattern in lat_patterns:
-                matches = re.findall(pattern, page_source)
-                if matches:
-                    for match in matches:
-                        coord_val = float(match)
-                        if 37.0 <= coord_val <= 38.0:  # 서울 위도 범위
-                            lat = coord_val
-                            break
-                if lat:
-                    break
-            
-            # 경도 찾기
-            for pattern in lng_patterns:
-                matches = re.findall(pattern, page_source)
-                if matches:
-                    for match in matches:
-                        coord_val = float(match)
-                        if 126.0 <= coord_val <= 128.0:  # 서울 경도 범위
-                            lng = coord_val
-                            break
-                if lng:
-                    break
-            
-            # HTML에서 추가 정보 추출
+            # BeautifulSoup으로 파싱
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             
-            # 전화번호 추출
-            phone = ""
-            # tel 클래스 확인
-            tel_elem = soup.find(class_='tel')
-            if tel_elem:
-                phone = tel_elem.get_text(strip=True)
-            else:
-                # tel: 링크 확인
-                tel_link = soup.find('a', href=lambda x: x and x.startswith('tel:'))
-                if tel_link:
-                    phone = tel_link.get_text(strip=True)
+            # 1. 메뉴 정보 추출 (강화)
+            menu_info = self._extract_menu_info(soup)
+            detail_info.update(menu_info)
             
-            # 주소 추출
-            address = store_info.get('basic_address', '')
-            # basic-info 클래스에서 주소 찾기
-            basic_info = soup.find(class_='basic-info')
-            if basic_info:
-                addr_text = basic_info.get_text()
-                # 주소 패턴 찾기 (서울, 경기 등으로 시작하는 주소)
-                addr_match = re.search(r'(서울[^0-9]*|경기[^0-9]*|인천[^0-9]*)[^\n]*', addr_text)
-                if addr_match:
-                    address = addr_match.group().strip()
+            # 2. 가격 정보 추출 (강화)
+            price_info = self._extract_price_info(soup)
+            detail_info.update(price_info)
             
-            # 영업시간 추출
-            open_hours = ""
-            busi_hours = soup.find(class_='busi-hours') or soup.find(class_='busi-hours-today')
-            if busi_hours:
-                open_hours = busi_hours.get_text(strip=True)
+            # 3. 영업시간 정보 추출 (강화)
+            hours_info = self._extract_hours_info(soup)
+            detail_info.update(hours_info)
             
-            # 태그 정보 추출 (맛 태그, 일반 태그)
-            tags = []
+            # 4. 이미지 URL 수집 (강화)
+            image_info = self._extract_image_info(soup)
+            detail_info.update(image_info)
             
-            # taste-tag 클래스
-            taste_tags = soup.find_all(class_='taste-tag')
-            for tag in taste_tags:
-                tag_text = tag.get_text(strip=True).replace('#', '')
-                if tag_text and tag_text not in tags:
-                    tags.append(tag_text)
+            # 5. 리뷰 및 설명 정보 추출 (강화)
+            review_info = self._extract_review_info(soup)
+            detail_info.update(review_info)
             
-            # tag, tags 클래스
-            tag_elems = soup.find_all(class_=['tag', 'tags'])
-            for tag in tag_elems:
-                tag_text = tag.get_text(strip=True).replace('#', '')
-                if tag_text and tag_text not in tags:
-                    tags.append(tag_text)
+            # 6. 연락처 정보 추출 (강화)
+            contact_info = self._extract_contact_info(soup)
+            detail_info.update(contact_info)
             
-            # 메뉴 가격 정보 추출
-            price_info = None
-            menu_price = soup.find(class_='Restaurant_MenuPrice')
-            if menu_price:
-                price_text = menu_price.get_text(strip=True)
-                # 숫자와 원 패턴 찾기
-                price_match = re.search(r'([0-9,]+)원', price_text)
-                if price_match:
-                    try:
-                        price_info = int(price_match.group(1).replace(',', ''))
-                    except:
-                        pass
+            # 7. 무한리필 관련 정보 추출 (강화)
+            refill_info = self._extract_refill_info(soup)
+            detail_info.update(refill_info)
             
-            # 평점 정보 재추출 (더 정확하게)
-            rating = store_info.get('diningcode_rating')
-            score = store_info.get('diningcode_score')
-            
-            # avg_score 클래스에서 사용자 평점
-            avg_score_elem = soup.find(class_='avg_score')
-            if avg_score_elem:
-                try:
-                    rating_text = avg_score_elem.get_text(strip=True)
-                    rating_match = re.search(r'([0-9.]+)', rating_text)
-                    if rating_match:
-                        rating = float(rating_match.group(1))
-                except:
-                    pass
-            
-            # highlight-score 클래스에서 다이닝코드 점수
-            highlight_score = soup.find(class_='highlight-score')
-            if highlight_score:
-                try:
-                    score_text = highlight_score.get_text(strip=True)
-                    score_match = re.search(r'([0-9]+)', score_text)
-                    if score_match:
-                        score = int(score_match.group(1))
-                except:
-                    pass
-            
-            # 이미지 URL 추출
-            image_urls = []
-            # 다이닝코드 이미지 패턴
-            img_elements = soup.find_all('img')
-            for img in img_elements:
-                src = img.get('src', '')
-                if src and ('diningcode' in src or 'restaurant' in src or 'food' in src):
-                    if src.startswith('//'):
-                        src = 'https:' + src
-                    elif src.startswith('/'):
-                        src = 'https://www.diningcode.com' + src
-                    
-                    if src not in image_urls:
-                        image_urls.append(src)
-            
-            # 설명 정보 추출
-            description = ""
-            detail_info = soup.find(class_='detail-info')
-            if detail_info:
-                description = detail_info.get_text(strip=True)[:500]  # 최대 500자
-            
-            # 상세 정보 업데이트
-            store_info.update({
-                'position_lat': lat,
-                'position_lng': lng,
-                'address': address,
-                'phone_number': phone,
-                'raw_categories_diningcode': tags,
-                'diningcode_rating': rating,
-                'diningcode_score': score,
-                'description': description,
-                'open_hours_raw': open_hours,
-                'price': price_info,
-                'refill_items': [],  # 무한리필 항목은 별도 로직 필요
-                'image_urls': image_urls[:10]  # 최대 10개 이미지
-            })
-            
-            logger.info(f"상세 정보 수집 완료: {store_info['name']}")
-            logger.info(f"  좌표: ({lat}, {lng})")
-            logger.info(f"  전화번호: {phone}")
-            logger.info(f"  주소: {address}")
-            logger.info(f"  태그: {len(tags)}개")
-            logger.info(f"  이미지: {len(image_urls)}개")
+            logger.info(f"상세 정보 수집 완료: {detail_info.get('name', 'Unknown')}")
             
         except Exception as e:
             logger.error(f"상세 정보 수집 중 오류: {e}")
+            # 기본 정보라도 반환
             
-        return store_info
+        return detail_info
+
+    def _extract_menu_info(self, soup: BeautifulSoup) -> Dict:
+        """메뉴 정보 추출 (강화)"""
+        menu_info = {
+            'menu_items': [],
+            'menu_categories': [],
+            'signature_menu': []
+        }
+        
+        try:
+            # 메뉴 섹션 찾기
+            menu_sections = soup.find_all(['div', 'section'], class_=re.compile(r'menu|Menu'))
+            
+            for section in menu_sections:
+                # 메뉴 아이템 추출
+                menu_items = section.find_all(['div', 'li'], class_=re.compile(r'menu-item|menuitem|item'))
+                
+                for item in menu_items:
+                    menu_name = item.find(['span', 'div', 'h3', 'h4'], class_=re.compile(r'name|title'))
+                    menu_price = item.find(['span', 'div'], class_=re.compile(r'price|cost|amount'))
+                    
+                    if menu_name:
+                        menu_data = {
+                            'name': menu_name.get_text(strip=True),
+                            'price': menu_price.get_text(strip=True) if menu_price else '',
+                        }
+                        menu_info['menu_items'].append(menu_data)
+            
+            # 대표 메뉴 추출
+            signature_elements = soup.find_all(['div', 'span'], class_=re.compile(r'signature|recommend|popular'))
+            for elem in signature_elements:
+                text = elem.get_text(strip=True)
+                if text and len(text) > 2:
+                    menu_info['signature_menu'].append(text)
+            
+            # 무한리필 관련 메뉴 키워드 검색
+            refill_keywords = ['무한리필', '무제한', '뷔페', '리필', '셀프바']
+            all_text = soup.get_text()
+            
+            for keyword in refill_keywords:
+                if keyword in all_text:
+                    # 키워드 주변 텍스트 추출
+                    pattern = rf'.{{0,20}}{keyword}.{{0,20}}'
+                    matches = re.findall(pattern, all_text, re.IGNORECASE)
+                    for match in matches[:3]:  # 최대 3개까지
+                        clean_match = re.sub(r'\s+', ' ', match.strip())
+                        if clean_match not in menu_info['signature_menu']:
+                            menu_info['signature_menu'].append(clean_match)
+            
+            logger.info(f"메뉴 정보 추출: {len(menu_info['menu_items'])}개 메뉴, {len(menu_info['signature_menu'])}개 대표메뉴")
+            
+        except Exception as e:
+            logger.error(f"메뉴 정보 추출 실패: {e}")
+        
+        return menu_info
+
+    def _extract_price_info(self, soup: BeautifulSoup) -> Dict:
+        """가격 정보 추출 (강화)"""
+        price_info = {
+            'price_range': '',
+            'average_price': '',
+            'price_details': []
+        }
+        
+        try:
+            # 가격 관련 요소 찾기
+            price_elements = soup.find_all(['span', 'div', 'td'], class_=re.compile(r'price|cost|amount|won'))
+            
+            prices = []
+            for elem in price_elements:
+                text = elem.get_text(strip=True)
+                # 가격 패턴 매칭 (원, 만원 등)
+                price_matches = re.findall(r'[\d,]+\s*[만]?원', text)
+                prices.extend(price_matches)
+            
+            if prices:
+                # 중복 제거 및 정리
+                unique_prices = list(set(prices))
+                price_info['price_details'] = unique_prices[:10]  # 최대 10개
+                
+                # 가격 범위 추정
+                numeric_prices = []
+                for price in unique_prices:
+                    try:
+                        # 숫자만 추출하여 변환
+                        num_str = re.sub(r'[^\d,]', '', price).replace(',', '')
+                        if num_str:
+                            num = int(num_str)
+                            if '만원' in price:
+                                num *= 10000
+                            numeric_prices.append(num)
+                    except:
+                        continue
+                
+                if numeric_prices:
+                    min_price = min(numeric_prices)
+                    max_price = max(numeric_prices)
+                    avg_price = sum(numeric_prices) // len(numeric_prices)
+                    
+                    price_info['price_range'] = f"{min_price:,}원 ~ {max_price:,}원"
+                    price_info['average_price'] = f"{avg_price:,}원"
+            
+            logger.info(f"가격 정보 추출: {len(price_info['price_details'])}개 가격 정보")
+            
+        except Exception as e:
+            logger.error(f"가격 정보 추출 실패: {e}")
+        
+        return price_info
+
+    def _extract_hours_info(self, soup: BeautifulSoup) -> Dict:
+        """영업시간 정보 추출 (강화)"""
+        hours_info = {
+            'open_hours': '',
+            'open_hours_raw': '',
+            'break_time': '',
+            'last_order': '',
+            'holiday': ''
+        }
+        
+        try:
+            # 영업시간 관련 요소 찾기
+            time_elements = soup.find_all(['div', 'span', 'td'], class_=re.compile(r'time|hour|open|close'))
+            
+            time_texts = []
+            for elem in time_elements:
+                text = elem.get_text(strip=True)
+                if text and any(keyword in text for keyword in ['시', ':', '영업', '휴무', '브레이크']):
+                    time_texts.append(text)
+            
+            # 영업시간 패턴 매칭
+            for text in time_texts:
+                # 영업시간 패턴
+                if re.search(r'\d{1,2}:\d{2}.*\d{1,2}:\d{2}', text):
+                    if not hours_info['open_hours']:
+                        hours_info['open_hours'] = text
+                    hours_info['open_hours_raw'] += text + ' | '
+                
+                # 브레이크타임 패턴
+                if '브레이크' in text or 'break' in text.lower():
+                    hours_info['break_time'] = text
+                
+                # 라스트오더 패턴
+                if '라스트' in text or 'last' in text.lower() or '주문마감' in text:
+                    hours_info['last_order'] = text
+                
+                # 휴무일 패턴
+                if '휴무' in text or '정기휴일' in text:
+                    hours_info['holiday'] = text
+            
+            # 정리
+            hours_info['open_hours_raw'] = hours_info['open_hours_raw'].rstrip(' | ')
+            
+            logger.info(f"영업시간 정보 추출 완료")
+            
+        except Exception as e:
+            logger.error(f"영업시간 정보 추출 실패: {e}")
+        
+        return hours_info
+
+    def _extract_image_info(self, soup: BeautifulSoup) -> Dict:
+        """이미지 URL 수집 (강화)"""
+        image_info = {
+            'image_urls': [],
+            'main_image': '',
+            'menu_images': [],
+            'interior_images': []
+        }
+        
+        try:
+            # 모든 이미지 요소 찾기
+            img_elements = soup.find_all('img')
+            
+            for img in img_elements:
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy')
+                if src and src.startswith('http'):
+                    # 이미지 분류
+                    alt_text = img.get('alt', '').lower()
+                    class_name = ' '.join(img.get('class', [])).lower()
+                    
+                    if any(keyword in alt_text + class_name for keyword in ['menu', '메뉴']):
+                        image_info['menu_images'].append(src)
+                    elif any(keyword in alt_text + class_name for keyword in ['interior', '내부', '인테리어']):
+                        image_info['interior_images'].append(src)
+                    elif any(keyword in alt_text + class_name for keyword in ['main', '대표', 'logo']):
+                        if not image_info['main_image']:
+                            image_info['main_image'] = src
+                    
+                    image_info['image_urls'].append(src)
+            
+            # 중복 제거
+            image_info['image_urls'] = list(set(image_info['image_urls']))[:20]  # 최대 20개
+            image_info['menu_images'] = list(set(image_info['menu_images']))[:10]
+            image_info['interior_images'] = list(set(image_info['interior_images']))[:10]
+            
+            logger.info(f"이미지 정보 추출: 총 {len(image_info['image_urls'])}개")
+            
+        except Exception as e:
+            logger.error(f"이미지 정보 추출 실패: {e}")
+        
+        return image_info
+
+    def _extract_review_info(self, soup: BeautifulSoup) -> Dict:
+        """리뷰 및 설명 정보 추출 (강화)"""
+        review_info = {
+            'description': '',
+            'review_summary': '',
+            'keywords': [],
+            'atmosphere': ''
+        }
+        
+        try:
+            # 설명 텍스트 추출
+            desc_elements = soup.find_all(['div', 'p'], class_=re.compile(r'desc|description|intro|summary'))
+            descriptions = []
+            
+            for elem in desc_elements:
+                text = elem.get_text(strip=True)
+                if text and len(text) > 10:
+                    descriptions.append(text)
+            
+            if descriptions:
+                review_info['description'] = ' '.join(descriptions[:3])  # 최대 3개 합치기
+            
+            # 키워드 추출 (무한리필 관련)
+            refill_keywords = ['무한리필', '뷔페', '무제한', '셀프바', '리필가능', '무료리필']
+            food_keywords = ['고기', '삼겹살', '소고기', '돼지고기', '초밥', '회', '해산물', '야채']
+            
+            all_text = soup.get_text().lower()
+            found_keywords = []
+            
+            for keyword in refill_keywords + food_keywords:
+                if keyword in all_text:
+                    found_keywords.append(keyword)
+            
+            review_info['keywords'] = found_keywords[:10]  # 최대 10개
+            
+            logger.info(f"리뷰 정보 추출: {len(found_keywords)}개 키워드")
+            
+        except Exception as e:
+            logger.error(f"리뷰 정보 추출 실패: {e}")
+        
+        return review_info
+
+    def _extract_contact_info(self, soup: BeautifulSoup) -> Dict:
+        """연락처 정보 추출 (강화)"""
+        contact_info = {
+            'phone_number': '',
+            'website': '',
+            'social_media': []
+        }
+        
+        try:
+            # 전화번호 패턴 매칭
+            all_text = soup.get_text()
+            phone_patterns = [
+                r'0\d{1,2}-\d{3,4}-\d{4}',  # 02-1234-5678
+                r'0\d{9,10}',               # 0212345678
+                r'\d{3}-\d{3,4}-\d{4}'      # 010-1234-5678
+            ]
+            
+            for pattern in phone_patterns:
+                matches = re.findall(pattern, all_text)
+                if matches:
+                    contact_info['phone_number'] = matches[0]
+                    break
+            
+            # 웹사이트 링크 찾기
+            links = soup.find_all('a', href=True)
+            for link in links:
+                href = link['href']
+                if href.startswith('http') and 'diningcode.com' not in href:
+                    contact_info['website'] = href
+                    break
+            
+            logger.info(f"연락처 정보 추출 완료")
+            
+        except Exception as e:
+            logger.error(f"연락처 정보 추출 실패: {e}")
+        
+        return contact_info
+
+    def _extract_refill_info(self, soup: BeautifulSoup) -> Dict:
+        """무한리필 관련 정보 추출 (강화)"""
+        refill_info = {
+            'refill_items': [],
+            'refill_type': '',
+            'refill_conditions': '',
+            'is_confirmed_refill': False
+        }
+        
+        try:
+            all_text = soup.get_text()
+            
+            # 무한리필 아이템 추출
+            refill_patterns = [
+                r'무한리필\s*[:：]?\s*([^.\n]{1,30})',
+                r'무제한\s*[:：]?\s*([^.\n]{1,30})',
+                r'리필\s*가능\s*[:：]?\s*([^.\n]{1,30})'
+            ]
+            
+            items = []
+            for pattern in refill_patterns:
+                matches = re.findall(pattern, all_text)
+                items.extend(matches)
+            
+            # 정리 및 필터링
+            cleaned_items = []
+            for item in items:
+                item = item.strip()
+                if item and len(item) > 2 and len(item) < 50:
+                    cleaned_items.append(item)
+            
+            refill_info['refill_items'] = list(set(cleaned_items))[:10]
+            
+            # 무한리필 확인
+            refill_keywords = ['무한리필', '무제한', '뷔페', '셀프바']
+            for keyword in refill_keywords:
+                if keyword in all_text:
+                    refill_info['is_confirmed_refill'] = True
+                    break
+            
+            # 리필 타입 추정
+            if '고기' in all_text:
+                refill_info['refill_type'] = '고기무한리필'
+            elif '초밥' in all_text or '회' in all_text:
+                refill_info['refill_type'] = '초밥뷔페'
+            elif '뷔페' in all_text:
+                refill_info['refill_type'] = '뷔페'
+            else:
+                refill_info['refill_type'] = '무한리필'
+            
+            logger.info(f"무한리필 정보 추출: {len(refill_info['refill_items'])}개 아이템")
+            
+        except Exception as e:
+            logger.error(f"무한리필 정보 추출 실패: {e}")
+        
+        return refill_info
     
     def close(self):
         """WebDriver 종료"""
@@ -520,17 +751,24 @@ class DiningCodeCrawler:
 
 # 테스트 실행 함수
 def test_crawling():
-    """기본 크롤링 테스트"""
+    """기본 크롤링 테스트 (지역명 포함 키워드 사용)"""
     crawler = DiningCodeCrawler()
     
     try:
-        # 1. 목록 수집 테스트
-        stores = crawler.get_store_list("무한리필", config.TEST_RECT)
+        # 1. 목록 수집 테스트 (지역명 포함 키워드 사용)
+        region_name = config.REGIONS[config.TEST_REGION]["name"]
+        test_keyword = f"{region_name} 무한리필"  # 지역명 포함
+        logger.info(f"테스트 키워드: {test_keyword}")
+        
+        stores = crawler.get_store_list(test_keyword, config.TEST_RECT)
         logger.info(f"총 {len(stores)}개 가게 발견")
         
         if stores:
             # 2. 첫 번째 가게 상세 정보 수집 테스트
             first_store = stores[0]
+            logger.info(f"테스트 대상 가게: {first_store.get('name')}")
+            logger.info(f"가게 ID: {first_store.get('diningcode_place_id')}")
+            
             detailed_store = crawler.get_store_detail(first_store)
             
             logger.info("=== 테스트 결과 ===")
@@ -541,6 +779,22 @@ def test_crawling():
             df = pd.DataFrame([detailed_store])
             df.to_csv('data/test_crawling_result.csv', index=False, encoding='utf-8-sig')
             logger.info("테스트 결과를 data/test_crawling_result.csv에 저장")
+            
+        else:
+            logger.warning(f"'{test_keyword}' 키워드로 검색된 가게가 없습니다.")
+            logger.info("다른 키워드를 시도해보겠습니다...")
+            
+            # 백업 키워드로 재시도
+            backup_keyword = "강남 고기무한리필"
+            logger.info(f"백업 키워드: {backup_keyword}")
+            stores = crawler.get_store_list(backup_keyword, config.TEST_RECT)
+            
+            if stores:
+                first_store = stores[0]
+                detailed_store = crawler.get_store_detail(first_store)
+                logger.info(f"백업 키워드로 {len(stores)}개 가게 발견")
+            else:
+                logger.warning("백업 키워드로도 가게를 찾을 수 없습니다.")
             
     except Exception as e:
         logger.error(f"테스트 중 오류: {e}")

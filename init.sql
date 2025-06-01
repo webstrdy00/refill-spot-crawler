@@ -1,4 +1,3 @@
-
 -- Refill Spot 데이터베이스 스키마 (기존 프로젝트 구조 기반)
 
 -- 1. PostGIS 확장 활성화 (공간 인덱싱용)
@@ -7,35 +6,78 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- 2. 카테고리 테이블
 CREATE TABLE IF NOT EXISTS categories (
   id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name VARCHAR(100) UNIQUE NOT NULL,
   description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 3. 가게 테이블 (기존 구조 + 크롤링 필드 추가)
 CREATE TABLE IF NOT EXISTS stores (
   id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL,
-  address TEXT NOT NULL,
+  diningcode_place_id VARCHAR(50) UNIQUE NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  address TEXT,
   description TEXT,
-  position_lat FLOAT NOT NULL,
-  position_lng FLOAT NOT NULL,
-  position_x FLOAT,  -- 카카오맵 좌표계 (선택사항)
-  position_y FLOAT,  -- 카카오맵 좌표계 (선택사항)
-  naver_rating FLOAT,
-  kakao_rating FLOAT,
-  diningcode_rating FLOAT,  -- 다이닝코드 평점 추가
+  
+  -- 위치 정보
+  position_lat DECIMAL(10, 8),
+  position_lng DECIMAL(11, 8),
+  position_x DECIMAL(15, 6),  -- 카카오맵 좌표
+  position_y DECIMAL(15, 6),  -- 카카오맵 좌표
+  geom GEOMETRY(POINT, 4326), -- PostGIS 지리 정보
+  
+  -- 평점 정보
+  naver_rating DECIMAL(3, 2),
+  kakao_rating DECIMAL(3, 2),
+  diningcode_rating DECIMAL(3, 2),
+  
+  -- 영업시간 정보 (강화)
   open_hours TEXT,
-  open_hours_raw TEXT,  -- 크롤링된 원본 영업시간
-  price TEXT,
+  open_hours_raw TEXT,
+  break_time TEXT,
+  last_order TEXT,
+  holiday TEXT,
+  
+  -- 가격 정보 (강화)
+  price INTEGER,
+  price_range TEXT,
+  average_price TEXT,
+  price_details TEXT[],
+  
+  -- 무한리필 정보 (강화)
   refill_items TEXT[],
+  refill_type TEXT,
+  refill_conditions TEXT,
+  is_confirmed_refill BOOLEAN DEFAULT FALSE,
+  
+  -- 이미지 정보 (강화)
   image_urls TEXT[],
-  phone_number TEXT,  -- 전화번호 추가
-  diningcode_place_id TEXT UNIQUE,  -- 다이닝코드 고유 ID
-  raw_categories_diningcode TEXT[],  -- 다이닝코드 원본 카테고리
-  status TEXT DEFAULT '운영중',  -- 운영 상태
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  main_image TEXT,
+  menu_images TEXT[],
+  interior_images TEXT[],
+  
+  -- 메뉴 정보 (강화)
+  menu_items JSONB,
+  menu_categories TEXT[],
+  signature_menu TEXT[],
+  
+  -- 리뷰 및 설명 정보 (강화)
+  review_summary TEXT,
+  keywords TEXT[],
+  atmosphere TEXT,
+  
+  -- 연락처 정보 (강화)
+  phone_number VARCHAR(20),
+  website TEXT,
+  social_media TEXT[],
+  
+  -- 기존 필드
+  raw_categories_diningcode TEXT[],
+  status VARCHAR(20) DEFAULT '운영중',
+  
+  -- 타임스탬프
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- PostGIS 공간 인덱싱을 위한 geom 컬럼 추가
@@ -77,15 +119,15 @@ CREATE TABLE IF NOT EXISTS store_categories (
 -- 5. 크롤링 로그 테이블 (추가)
 CREATE TABLE IF NOT EXISTS crawling_logs (
   id SERIAL PRIMARY KEY,
-  keyword TEXT,
-  rect_area TEXT,
+  keyword VARCHAR(100),
+  rect_area VARCHAR(200),
   stores_found INTEGER DEFAULT 0,
   stores_processed INTEGER DEFAULT 0,
   errors INTEGER DEFAULT 0,
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  status TEXT DEFAULT 'running',  -- running, completed, failed
-  error_message TEXT
+  status VARCHAR(20) DEFAULT 'running',
+  error_message TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP
 );
 
 -- 6. RPC 함수들 (기존 프로젝트 구조 유지)
@@ -241,3 +283,138 @@ RETURNS TABLE (
     MAX(created_at) as last_crawled
   FROM stores;
 $ LANGUAGE sql STABLE;
+
+-- 인덱스 생성 (성능 최적화)
+CREATE INDEX IF NOT EXISTS idx_stores_diningcode_id ON stores(diningcode_place_id);
+CREATE INDEX IF NOT EXISTS idx_stores_position ON stores(position_lat, position_lng);
+CREATE INDEX IF NOT EXISTS idx_stores_geom ON stores USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_stores_refill_type ON stores(refill_type);
+CREATE INDEX IF NOT EXISTS idx_stores_confirmed_refill ON stores(is_confirmed_refill);
+CREATE INDEX IF NOT EXISTS idx_stores_status ON stores(status);
+CREATE INDEX IF NOT EXISTS idx_stores_name ON stores USING GIN(to_tsvector('korean', name));
+CREATE INDEX IF NOT EXISTS idx_stores_address ON stores USING GIN(to_tsvector('korean', address));
+CREATE INDEX IF NOT EXISTS idx_stores_keywords ON stores USING GIN(keywords);
+CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+CREATE INDEX IF NOT EXISTS idx_crawling_logs_created_at ON crawling_logs(created_at);
+
+-- 트리거 함수: 좌표가 업데이트될 때 geom 필드 자동 업데이트
+CREATE OR REPLACE FUNCTION update_geom_from_coordinates()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.position_lat IS NOT NULL AND NEW.position_lng IS NOT NULL THEN
+        NEW.geom = ST_SetSRID(ST_MakePoint(NEW.position_lng, NEW.position_lat), 4326);
+    END IF;
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 트리거 생성
+DROP TRIGGER IF EXISTS trigger_update_geom ON stores;
+CREATE TRIGGER trigger_update_geom
+    BEFORE INSERT OR UPDATE ON stores
+    FOR EACH ROW
+    EXECUTE FUNCTION update_geom_from_coordinates();
+
+-- 기본 카테고리 데이터 삽입
+INSERT INTO categories (name, description) VALUES 
+    ('무한리필', '무한리필 서비스를 제공하는 음식점'),
+    ('고기무한리필', '고기류 무한리필 전문점'),
+    ('소고기무한리필', '소고기 무한리필 전문점'),
+    ('삼겹살무한리필', '삼겹살 무한리필 전문점'),
+    ('뷔페', '뷔페 형태의 음식점'),
+    ('초밥뷔페', '초밥 뷔페 전문점'),
+    ('해산물무한리필', '해산물 무한리필 전문점'),
+    ('야채무한리필', '야채 무한리필 서비스'),
+    ('셀프바', '셀프바 운영 음식점'),
+    ('한식', '한국 음식 전문점'),
+    ('일식', '일본 음식 전문점'),
+    ('중식', '중국 음식 전문점'),
+    ('양식', '서양 음식 전문점'),
+    ('아시안', '아시아 음식 전문점'),
+    ('강남', '강남 지역'),
+    ('홍대', '홍대 지역'),
+    ('마포', '마포 지역'),
+    ('강북', '강북 지역'),
+    ('서울', '서울 지역')
+ON CONFLICT (name) DO NOTHING;
+
+-- 뷰 생성: 무한리필 확정 가게 목록
+CREATE OR REPLACE VIEW confirmed_refill_stores AS
+SELECT 
+    s.*,
+    array_agg(DISTINCT c.name) as category_names
+FROM stores s
+LEFT JOIN store_categories sc ON s.id = sc.store_id
+LEFT JOIN categories c ON sc.category_id = c.id
+WHERE s.is_confirmed_refill = true
+GROUP BY s.id;
+
+-- 뷰 생성: 지역별 통계
+CREATE OR REPLACE VIEW regional_stats AS
+SELECT 
+    CASE 
+        WHEN address LIKE '%강남%' THEN '강남'
+        WHEN address LIKE '%홍대%' OR address LIKE '%마포%' THEN '홍대/마포'
+        WHEN address LIKE '%강북%' THEN '강북'
+        WHEN address LIKE '%서울%' THEN '기타 서울'
+        ELSE '기타'
+    END as region,
+    COUNT(*) as total_stores,
+    COUNT(CASE WHEN is_confirmed_refill = true THEN 1 END) as confirmed_refill_stores,
+    AVG(CASE WHEN diningcode_rating IS NOT NULL THEN diningcode_rating END) as avg_rating,
+    COUNT(CASE WHEN menu_items IS NOT NULL THEN 1 END) as stores_with_menu
+FROM stores
+GROUP BY region
+ORDER BY total_stores DESC;
+
+-- 함수 생성: 거리 기반 검색
+CREATE OR REPLACE FUNCTION find_nearby_stores(
+    lat DECIMAL(10, 8),
+    lng DECIMAL(11, 8),
+    radius_km INTEGER DEFAULT 5
+)
+RETURNS TABLE (
+    store_id INTEGER,
+    store_name VARCHAR(200),
+    distance_km DECIMAL(10, 3),
+    refill_type TEXT,
+    is_confirmed BOOLEAN
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        s.id,
+        s.name,
+        ROUND(ST_Distance(
+            ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
+            s.geom::geography
+        ) / 1000, 3) as distance_km,
+        s.refill_type,
+        s.is_confirmed_refill
+    FROM stores s
+    WHERE s.geom IS NOT NULL
+    AND ST_DWithin(
+        ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
+        s.geom::geography,
+        radius_km * 1000
+    )
+    ORDER BY distance_km;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 권한 설정 (필요한 경우)
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO your_user;
+-- GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO your_user;
+
+-- 완료 메시지
+DO $$
+BEGIN
+    RAISE NOTICE '데이터베이스 초기화 완료 (강화된 스키마)';
+    RAISE NOTICE '- PostGIS 확장 설치됨';
+    RAISE NOTICE '- 강화된 stores 테이블 생성됨';
+    RAISE NOTICE '- 성능 최적화 인덱스 생성됨';
+    RAISE NOTICE '- 지리 정보 처리 기능 추가됨';
+    RAISE NOTICE '- 기본 카테고리 데이터 삽입됨';
+    RAISE NOTICE '- 유용한 뷰와 함수 생성됨';
+END $$;

@@ -1,35 +1,15 @@
 """
 다이닝코드 무한리필 가게 크롤링 메인 스크립트
-1단계: MVP 테스트용
+2단계: 강화된 파싱 및 성능 최적화 버전
 """
 
 import logging
 import pandas as pd
-from typing import List, Dict
-import config
-from crawler import DiningCodeCrawler
-from database import DatabaseManager
-
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('refill_spot_crawler.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-"""
-다이닝코드 무한리필 가게 크롤링 메인 스크립트
-1단계: MVP 테스트용 (PostGIS 지원 버전)
-"""
-
-import logging
-import pandas as pd
+import time
+import json
 from typing import List, Dict
 from collections import Counter
+from datetime import datetime
 import config
 from crawler import DiningCodeCrawler
 from database import DatabaseManager
@@ -44,6 +24,428 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+class CrawlingProgressMonitor:
+    """크롤링 진행상황 모니터링 클래스"""
+    
+    def __init__(self):
+        self.start_time = None
+        self.total_keywords = 0
+        self.completed_keywords = 0
+        self.total_stores = 0
+        self.processed_stores = 0
+        self.failed_stores = 0
+        self.current_keyword = ""
+        
+    def start_session(self, total_keywords: int):
+        """크롤링 세션 시작"""
+        self.start_time = datetime.now()
+        self.total_keywords = total_keywords
+        self.completed_keywords = 0
+        self.total_stores = 0
+        self.processed_stores = 0
+        self.failed_stores = 0
+        logger.info(f"=== 크롤링 세션 시작: {total_keywords}개 키워드 ===")
+        
+    def start_keyword(self, keyword: str):
+        """키워드 처리 시작"""
+        self.current_keyword = keyword
+        logger.info(f"키워드 '{keyword}' 처리 시작 ({self.completed_keywords + 1}/{self.total_keywords})")
+        
+    def update_stores_found(self, count: int):
+        """발견된 가게 수 업데이트"""
+        self.total_stores += count
+        logger.info(f"키워드 '{self.current_keyword}': {count}개 가게 발견")
+        
+    def update_store_processed(self, success: bool = True):
+        """가게 처리 완료 업데이트"""
+        if success:
+            self.processed_stores += 1
+        else:
+            self.failed_stores += 1
+            
+    def complete_keyword(self):
+        """키워드 처리 완료"""
+        self.completed_keywords += 1
+        elapsed = datetime.now() - self.start_time
+        avg_time_per_keyword = elapsed.total_seconds() / self.completed_keywords
+        remaining_keywords = self.total_keywords - self.completed_keywords
+        estimated_remaining = remaining_keywords * avg_time_per_keyword
+        
+        logger.info(f"키워드 '{self.current_keyword}' 완료")
+        logger.info(f"진행률: {self.completed_keywords}/{self.total_keywords} ({self.completed_keywords/self.total_keywords*100:.1f}%)")
+        logger.info(f"예상 남은 시간: {estimated_remaining/60:.1f}분")
+        
+    def get_summary(self) -> Dict:
+        """세션 요약 정보 반환"""
+        elapsed = datetime.now() - self.start_time if self.start_time else None
+        return {
+            'total_keywords': self.total_keywords,
+            'completed_keywords': self.completed_keywords,
+            'total_stores_found': self.total_stores,
+            'processed_stores': self.processed_stores,
+            'failed_stores': self.failed_stores,
+            'success_rate': self.processed_stores / max(self.total_stores, 1) * 100,
+            'elapsed_time_minutes': elapsed.total_seconds() / 60 if elapsed else 0
+        }
+
+def process_crawled_data_enhanced(stores_data: List[Dict]) -> List[Dict]:
+    """크롤링된 데이터 정제 및 처리 (강화된 버전)"""
+    processed_stores = []
+    
+    for store in stores_data:
+        # 필수 필드 검증
+        if not store.get('diningcode_place_id') or not store.get('name'):
+            logger.warning(f"필수 필드 누락: {store}")
+            continue
+        
+        # 무한리필 관련성 검증 (강화)
+        is_refill = validate_refill_relevance(store)
+        if not is_refill:
+            logger.warning(f"무한리필 관련성 없음: {store.get('name')}")
+            continue
+        
+        # 좌표 유효성 검증
+        lat, lng = validate_coordinates(store)
+        if not lat or not lng:
+            logger.warning(f"좌표 정보 없음: {store.get('name')}")
+            continue
+        
+        # 평점 정보 정규화
+        rating = normalize_rating(store.get('diningcode_rating'))
+        
+        # 가격 정보 정규화
+        price_info = normalize_price_info(store)
+        
+        # 정제된 데이터 구성 (강화된 스키마)
+        processed_store = {
+            # 기본 정보
+            'name': store.get('name', '').strip(),
+            'address': store.get('address', '').strip(),
+            'description': store.get('description', '').strip(),
+            
+            # 위치 정보
+            'position_lat': lat,
+            'position_lng': lng,
+            'position_x': None,
+            'position_y': None,
+            
+            # 평점 정보
+            'naver_rating': None,
+            'kakao_rating': None,
+            'diningcode_rating': rating,
+            
+            # 영업시간 정보 (강화)
+            'open_hours': store.get('open_hours', ''),
+            'open_hours_raw': store.get('open_hours_raw', ''),
+            'break_time': store.get('break_time', ''),
+            'last_order': store.get('last_order', ''),
+            'holiday': store.get('holiday', ''),
+            
+            # 가격 정보 (강화)
+            'price': price_info.get('price'),
+            'price_range': store.get('price_range', ''),
+            'average_price': store.get('average_price', ''),
+            'price_details': store.get('price_details', []),
+            
+            # 무한리필 정보 (강화)
+            'refill_items': store.get('refill_items', []),
+            'refill_type': store.get('refill_type', ''),
+            'refill_conditions': store.get('refill_conditions', ''),
+            'is_confirmed_refill': store.get('is_confirmed_refill', False),
+            
+            # 이미지 정보 (강화)
+            'image_urls': store.get('image_urls', []),
+            'main_image': store.get('main_image', ''),
+            'menu_images': store.get('menu_images', []),
+            'interior_images': store.get('interior_images', []),
+            
+            # 메뉴 정보 (강화)
+            'menu_items': store.get('menu_items', []),
+            'menu_categories': store.get('menu_categories', []),
+            'signature_menu': store.get('signature_menu', []),
+            
+            # 리뷰 및 설명 정보 (강화)
+            'review_summary': store.get('review_summary', ''),
+            'keywords': store.get('keywords', []),
+            'atmosphere': store.get('atmosphere', ''),
+            
+            # 연락처 정보 (강화)
+            'phone_number': store.get('phone_number', '').strip(),
+            'website': store.get('website', ''),
+            'social_media': store.get('social_media', []),
+            
+            # 기존 필드
+            'diningcode_place_id': store.get('diningcode_place_id'),
+            'raw_categories_diningcode': store.get('raw_categories_diningcode', []),
+            'status': '운영중'
+        }
+        
+        processed_stores.append(processed_store)
+    
+    logger.info(f"데이터 정제 완료: {len(stores_data)} -> {len(processed_stores)}")
+    return processed_stores
+
+def validate_refill_relevance(store: Dict) -> bool:
+    """무한리필 관련성 검증 (강화)"""
+    refill_keywords = ['무한리필', '뷔페', '무제한', '리필', '셀프바', '무료리필']
+    
+    # 이름에서 확인
+    name = store.get('name', '').lower()
+    for keyword in refill_keywords:
+        if keyword in name:
+            return True
+    
+    # 카테고리에서 확인
+    categories = store.get('raw_categories_diningcode', [])
+    for category in categories:
+        for keyword in refill_keywords:
+            if keyword in category.lower():
+                return True
+    
+    # 무한리필 확정 필드 확인
+    if store.get('is_confirmed_refill'):
+        return True
+    
+    # 리필 아이템이 있는 경우
+    if store.get('refill_items') and len(store.get('refill_items', [])) > 0:
+        return True
+    
+    # 키워드에서 확인
+    keywords = store.get('keywords', [])
+    for keyword in keywords:
+        for refill_kw in refill_keywords:
+            if refill_kw in keyword.lower():
+                return True
+    
+    return False
+
+def validate_coordinates(store: Dict) -> tuple:
+    """좌표 유효성 검증"""
+    lat = store.get('position_lat')
+    lng = store.get('position_lng')
+    
+    if not lat or not lng:
+        return None, None
+    
+    try:
+        lat = float(lat)
+        lng = float(lng)
+        # 한국 좌표 범위 확인
+        if not (33 <= lat <= 39 and 124 <= lng <= 132):
+            return None, None
+        return lat, lng
+    except (ValueError, TypeError):
+        return None, None
+
+def normalize_rating(rating) -> float:
+    """평점 정규화"""
+    if not rating:
+        return None
+    try:
+        rating = float(rating)
+        if 0 <= rating <= 5:
+            return rating
+    except (ValueError, TypeError):
+        pass
+    return None
+
+def normalize_price_info(store: Dict) -> Dict:
+    """가격 정보 정규화"""
+    price_info = {'price': None}
+    
+    # 기존 price 필드 처리
+    price = store.get('price')
+    if price:
+        try:
+            if isinstance(price, str):
+                # 문자열에서 숫자 추출
+                import re
+                numbers = re.findall(r'\d+', price.replace(',', ''))
+                if numbers:
+                    price_info['price'] = int(numbers[0])
+            else:
+                price_info['price'] = int(price)
+        except (ValueError, TypeError):
+            pass
+    
+    # average_price에서 추출 시도
+    if not price_info['price']:
+        avg_price = store.get('average_price', '')
+        if avg_price:
+            try:
+                import re
+                numbers = re.findall(r'\d+', avg_price.replace(',', ''))
+                if numbers:
+                    price_info['price'] = int(numbers[0])
+            except:
+                pass
+    
+    return price_info
+
+def run_enhanced_crawling():
+    """강화된 크롤링 실행"""
+    crawler = None
+    db = None
+    monitor = CrawlingProgressMonitor()
+    
+    try:
+        logger.info("=== Refill Spot 크롤링 시작 (강화된 버전) ===")
+        
+        # 크롤러 초기화
+        crawler = DiningCodeCrawler()
+        
+        # 데이터베이스 초기화
+        db = DatabaseManager()
+        if not db.test_connection():
+            logger.error("데이터베이스 연결 실패")
+            return
+        
+        db.create_tables()
+        
+        # 크롤링 설정
+        region_name = config.REGIONS[config.TEST_REGION]["name"]
+        keywords = config.TEST_KEYWORDS
+        rect = config.TEST_RECT
+        
+        logger.info(f"=== {region_name} 지역 크롤링 시작 ===")
+        logger.info(f"사용할 키워드: {keywords}")
+        logger.info(f"검색 영역: {rect}")
+        
+        # 진행상황 모니터링 시작
+        monitor.start_session(len(keywords))
+        
+        all_stores = []
+        
+        # 각 키워드별로 크롤링
+        for keyword in keywords:
+            monitor.start_keyword(keyword)
+            
+            try:
+                # 목록 수집
+                stores = crawler.get_store_list(keyword, rect)
+                monitor.update_stores_found(len(stores))
+                
+                if not stores:
+                    logger.warning(f"키워드 '{keyword}'로 검색된 가게가 없습니다.")
+                    monitor.complete_keyword()
+                    continue
+                
+                # 상세 정보 수집 (배치 처리)
+                detailed_stores = process_stores_batch(crawler, stores, monitor)
+                all_stores.extend(detailed_stores)
+                
+                # 키워드별 중간 저장 (메모리 효율성)
+                if detailed_stores:
+                    processed_data = process_crawled_data_enhanced(detailed_stores)
+                    if processed_data:
+                        db.save_crawled_data(processed_data, keyword, rect)
+                        logger.info(f"키워드 '{keyword}' 데이터 저장 완료: {len(processed_data)}개")
+                
+                monitor.complete_keyword()
+                
+                # 키워드 간 휴식 시간
+                time.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"키워드 '{keyword}' 처리 중 오류: {e}")
+                monitor.complete_keyword()
+                continue
+        
+        # 최종 결과 요약
+        summary = monitor.get_summary()
+        logger.info("=== 크롤링 완료 ===")
+        logger.info(f"총 키워드: {summary['total_keywords']}개")
+        logger.info(f"총 발견 가게: {summary['total_stores_found']}개")
+        logger.info(f"성공 처리: {summary['processed_stores']}개")
+        logger.info(f"실패: {summary['failed_stores']}개")
+        logger.info(f"성공률: {summary['success_rate']:.1f}%")
+        logger.info(f"소요 시간: {summary['elapsed_time_minutes']:.1f}분")
+        
+        # 강화된 통계 조회
+        stats = db.get_enhanced_crawling_stats()
+        if stats:
+            logger.info("=== 데이터베이스 통계 ===")
+            basic = stats.get('basic_stats', {})
+            logger.info(f"총 가게 수: {basic.get('total_stores', 0)}개")
+            logger.info(f"무한리필 확정: {basic.get('confirmed_refill_stores', 0)}개")
+            logger.info(f"메뉴 정보 보유: {basic.get('stores_with_menu', 0)}개")
+            logger.info(f"이미지 보유: {basic.get('stores_with_images', 0)}개")
+            logger.info(f"가격 정보 보유: {basic.get('stores_with_price', 0)}개")
+            logger.info(f"평균 평점: {basic.get('avg_rating', 0):.2f}")
+        
+        return all_stores
+        
+    except Exception as e:
+        logger.error(f"크롤링 실행 중 오류: {e}")
+        return []
+        
+    finally:
+        if crawler:
+            crawler.close()
+        if db:
+            db.close()
+
+def process_stores_batch(crawler: DiningCodeCrawler, stores: List[Dict], monitor: CrawlingProgressMonitor, batch_size: int = 5) -> List[Dict]:
+    """가게 상세 정보 배치 처리"""
+    detailed_stores = []
+    
+    for i in range(0, len(stores), batch_size):
+        batch = stores[i:i + batch_size]
+        logger.info(f"배치 처리 {i//batch_size + 1}: {len(batch)}개 가게")
+        
+        for store in batch:
+            try:
+                logger.info(f"상세 정보 수집: {store.get('name')}")
+                detailed_store = crawler.get_store_detail(store)
+                detailed_stores.append(detailed_store)
+                monitor.update_store_processed(True)
+                
+                # 가게 간 휴식 시간
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"상세 정보 수집 실패: {store.get('name')} - {e}")
+                monitor.update_store_processed(False)
+                continue
+        
+        # 배치 간 휴식 시간
+        if i + batch_size < len(stores):
+            logger.info(f"배치 완료. 3초 휴식...")
+            time.sleep(3)
+    
+    return detailed_stores
+
+def run_region_expansion():
+    """지역 확장 크롤링"""
+    logger.info("=== 지역 확장 크롤링 시작 ===")
+    
+    # 모든 지역에 대해 크롤링 실행
+    for region_key, region_info in config.REGIONS.items():
+        logger.info(f"=== {region_info['name']} 지역 크롤링 ===")
+        
+        # 임시로 설정 변경
+        original_region = config.TEST_REGION
+        original_rect = config.TEST_RECT
+        original_keywords = config.TEST_KEYWORDS
+        
+        try:
+            config.TEST_REGION = region_key
+            config.TEST_RECT = region_info["rect"]
+            config.TEST_KEYWORDS = region_info["keywords"]
+            
+            # 해당 지역 크롤링 실행
+            run_enhanced_crawling()
+            
+        finally:
+            # 설정 복원
+            config.TEST_REGION = original_region
+            config.TEST_RECT = original_rect
+            config.TEST_KEYWORDS = original_keywords
+        
+        # 지역 간 휴식 시간
+        logger.info("지역 완료. 10초 휴식...")
+        time.sleep(10)
 
 def process_crawled_data(stores_data: List[Dict]) -> List[Dict]:
     """크롤링된 데이터 정제 및 처리 (새 스키마 반영)"""
@@ -263,296 +665,191 @@ def run_mvp_crawling():
             db.close()
         logger.info("=== 크롤링 완료 ===")
 
-def test_single_store():
-    """단일 가게 테스트 (지역별 키워드 사용)"""
+def test_single_store_enhanced():
+    """단일 가게 테스트 (강화된 버전)"""
     crawler = None
     
     try:
-        logger.info("=== 단일 가게 테스트 (지역별 키워드) ===")
+        logger.info("=== 단일 가게 테스트 (강화된 버전) ===")
         crawler = DiningCodeCrawler()
         
-        # 첫 번째 지역 키워드로 테스트
-        test_keyword = config.TEST_KEYWORDS[0]
-        test_rect = config.TEST_RECT
-        
+        # 지역명을 포함한 키워드로 검색
+        region_name = config.REGIONS[config.TEST_REGION]["name"]
+        test_keyword = f"{region_name} 무한리필"
         logger.info(f"테스트 키워드: {test_keyword}")
-        logger.info(f"테스트 영역: {test_rect}")
         
         # 목록에서 첫 번째 가게만
-        stores = crawler.get_store_list(test_keyword, test_rect)
-        logger.info(f"검색 결과: {len(stores)}개 가게 발견")
+        stores = crawler.get_store_list(test_keyword, config.TEST_RECT)
+        
+        if not stores:
+            # 백업 키워드로 재시도
+            backup_keyword = "강남 고기무한리필"
+            logger.info(f"백업 키워드로 재시도: {backup_keyword}")
+            stores = crawler.get_store_list(backup_keyword, config.TEST_RECT)
         
         if stores:
             first_store = stores[0]
-            logger.info(f"첫 번째 가게: {first_store.get('name')}")
+            logger.info(f"테스트 대상: {first_store.get('name')}")
+            logger.info(f"가게 ID: {first_store.get('diningcode_place_id')}")
             
             detailed_store = crawler.get_store_detail(first_store)
             
-            logger.info("=== 크롤링 결과 ===")
-            for key, value in detailed_store.items():
-                logger.info(f"{key}: {value}")
-                
-            # 정제 테스트
-            processed = process_crawled_data([detailed_store])
-            if processed:
-                logger.info("=== 정제된 데이터 ===")
-                for key, value in processed[0].items():
-                    logger.info(f"{key}: {value}")
+            logger.info("=== 강화된 테스트 결과 ===")
+            
+            # 기본 정보
+            logger.info("📍 기본 정보:")
+            logger.info(f"  이름: {detailed_store.get('name')}")
+            logger.info(f"  주소: {detailed_store.get('address')}")
+            logger.info(f"  전화번호: {detailed_store.get('phone_number')}")
+            logger.info(f"  평점: {detailed_store.get('diningcode_rating')}")
+            
+            # 무한리필 정보
+            logger.info("🍽️ 무한리필 정보:")
+            logger.info(f"  확정 여부: {detailed_store.get('is_confirmed_refill')}")
+            logger.info(f"  리필 타입: {detailed_store.get('refill_type')}")
+            logger.info(f"  리필 아이템: {detailed_store.get('refill_items', [])}")
+            
+            # 메뉴 정보
+            menu_items = detailed_store.get('menu_items', [])
+            signature_menu = detailed_store.get('signature_menu', [])
+            logger.info("🍴 메뉴 정보:")
+            logger.info(f"  메뉴 개수: {len(menu_items)}")
+            logger.info(f"  대표 메뉴: {signature_menu}")
+            
+            # 가격 정보
+            logger.info("💰 가격 정보:")
+            logger.info(f"  가격 범위: {detailed_store.get('price_range')}")
+            logger.info(f"  평균 가격: {detailed_store.get('average_price')}")
+            
+            # 영업시간 정보
+            logger.info("🕐 영업시간 정보:")
+            logger.info(f"  영업시간: {detailed_store.get('open_hours')}")
+            logger.info(f"  브레이크타임: {detailed_store.get('break_time')}")
+            logger.info(f"  휴무일: {detailed_store.get('holiday')}")
+            
+            # 이미지 정보
+            image_urls = detailed_store.get('image_urls', [])
+            menu_images = detailed_store.get('menu_images', [])
+            logger.info("📸 이미지 정보:")
+            logger.info(f"  총 이미지: {len(image_urls)}개")
+            logger.info(f"  메뉴 이미지: {len(menu_images)}개")
+            
+            # 키워드 정보
+            keywords = detailed_store.get('keywords', [])
+            logger.info("🏷️ 키워드:")
+            logger.info(f"  {keywords}")
+            
         else:
-            logger.warning("검색 결과가 없습니다")
-            logger.info("다른 키워드를 시도해보세요:")
-            for i, keyword in enumerate(config.TEST_KEYWORDS):
-                logger.info(f"  {i+1}. {keyword}")
-                    
+            logger.warning("테스트할 가게를 찾을 수 없습니다.")
+            logger.info("다음을 확인해보세요:")
+            logger.info("1. 네트워크 연결 상태")
+            logger.info("2. 다이닝코드 사이트 접근 가능 여부")
+            logger.info("3. 검색 키워드 및 지역 설정")
+            
     except Exception as e:
         logger.error(f"단일 가게 테스트 실패: {e}")
     finally:
         if crawler:
             crawler.close()
 
-def test_all_keywords():
-    """모든 키워드 테스트 (검색 결과 수만 확인)"""
-    crawler = None
+def show_database_stats():
+    """데이터베이스 통계 조회 및 출력"""
+    db = None
     
     try:
-        logger.info("=== 모든 키워드 테스트 ===")
-        crawler = DiningCodeCrawler()
-        
-        region_name = config.REGIONS[config.TEST_REGION]["name"]
-        keywords = config.TEST_KEYWORDS
-        rect = config.TEST_RECT
-        
-        logger.info(f"테스트 지역: {region_name}")
-        logger.info(f"테스트 영역: {rect}")
-        
-        results = []
-        for keyword in keywords:
-            try:
-                logger.info(f"키워드 '{keyword}' 테스트 중...")
-                stores = crawler.get_store_list(keyword, rect)
-                count = len(stores)
-                results.append((keyword, count))
-                logger.info(f"  결과: {count}개 가게 발견")
-                
-                if count > 0:
-                    # 첫 번째 가게 이름 출력
-                    first_store_name = stores[0].get('name', 'Unknown')
-                    logger.info(f"  첫 번째 가게: {first_store_name}")
-                
-            except Exception as e:
-                logger.error(f"키워드 '{keyword}' 테스트 실패: {e}")
-                results.append((keyword, 0))
-        
-        logger.info("=== 키워드별 검색 결과 요약 ===")
-        total_found = 0
-        for keyword, count in results:
-            logger.info(f"{keyword}: {count}개")
-            total_found += count
-        
-        logger.info(f"총 발견된 가게 수: {total_found}개")
-        
-        # 가장 많이 찾은 키워드 추천
-        if results:
-            best_keyword = max(results, key=lambda x: x[1])
-            logger.info(f"추천 키워드: '{best_keyword[0]}' ({best_keyword[1]}개 가게)")
-            
-    except Exception as e:
-        logger.error(f"키워드 테스트 실패: {e}")
-    finally:
-        if crawler:
-            crawler.close()
-
-def test_database_only():
-    """데이터베이스 기능만 테스트"""
-    try:
-        logger.info("=== 데이터베이스 전용 테스트 ===")
-        
+        logger.info("=== 데이터베이스 통계 조회 ===")
         db = DatabaseManager()
         
-        # 연결 및 테이블 확인
         if not db.test_connection():
+            logger.error("데이터베이스 연결 실패")
             return
         
-        db.create_tables()
+        stats = db.get_enhanced_crawling_stats()
         
-        # 통계 조회
-        stats = db.get_crawling_stats()
-        logger.info("현재 데이터베이스 통계:")
-        for key, value in stats.items():
-            logger.info(f"  {key}: {value}")
+        if not stats:
+            logger.warning("통계 데이터가 없습니다.")
+            return
         
-        # 테스트 데이터 삽입
-        test_data = [{
-            'name': 'MVP 테스트 무한리필 가게',
-            'address': '서울특별시 강남구 테스트동 123',
-            'description': 'MVP 테스트용 가게입니다',
-            'position_lat': 37.5665,
-            'position_lng': 126.9780,
-            'phone_number': '02-1234-5678',
-            'diningcode_place_id': 'mvp_test_001',
-            'diningcode_rating': 4.5,
-            'raw_categories_diningcode': ['무한리필', '한식', '고기'],
-            'status': '운영중'
-        }]
+        # 기본 통계
+        basic = stats.get('basic_stats', {})
+        logger.info("📊 기본 통계:")
+        logger.info(f"  총 가게 수: {basic.get('total_stores', 0):,}개")
+        logger.info(f"  무한리필 확정: {basic.get('confirmed_refill_stores', 0):,}개")
+        logger.info(f"  메뉴 정보 보유: {basic.get('stores_with_menu', 0):,}개")
+        logger.info(f"  이미지 보유: {basic.get('stores_with_images', 0):,}개")
+        logger.info(f"  가격 정보 보유: {basic.get('stores_with_price', 0):,}개")
+        logger.info(f"  평균 평점: {basic.get('avg_rating', 0):.2f}/5.0")
         
-        db.save_crawled_data(test_data, 'test', 'mvp_test')
-        logger.info("테스트 데이터 저장 완료")
+        # 리필 타입별 통계
+        refill_types = stats.get('refill_type_stats', [])
+        if refill_types:
+            logger.info("🍽️ 리필 타입별 통계:")
+            for item in refill_types[:5]:  # 상위 5개만
+                logger.info(f"  {item['refill_type']}: {item['count']}개")
         
-        # 업데이트된 통계
-        stats = db.get_crawling_stats()
-        logger.info("업데이트된 통계:")
-        for key, value in stats.items():
-            logger.info(f"  {key}: {value}")
+        # 지역별 통계
+        regions = stats.get('region_stats', [])
+        if regions:
+            logger.info("📍 지역별 통계:")
+            for item in regions:
+                logger.info(f"  {item['region']}: {item['count']}개")
         
-        db.close()
+        # 최근 크롤링 세션
+        recent = stats.get('recent_sessions', [])
+        if recent:
+            logger.info("📅 최근 크롤링 세션:")
+            for session in recent[:3]:  # 최근 3개만
+                created_at = session['created_at'].strftime('%Y-%m-%d %H:%M')
+                logger.info(f"  {created_at} | {session['keyword']} | {session['stores_processed']}개 처리")
         
     except Exception as e:
-        logger.error(f"데이터베이스 테스트 실패: {e}")
+        logger.error(f"통계 조회 실패: {e}")
+    finally:
+        if db:
+            db.close()
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == "test":
-            test_single_store()
-        elif sys.argv[1] == "db":
-            test_database_only()
-        elif sys.argv[1] == "keywords":
-            test_all_keywords()
-        elif sys.argv[1] == "full":
-            run_mvp_crawling()
+        command = sys.argv[1]
+        
+        if command == "enhanced":
+            # 강화된 크롤링 실행
+            logger.info("강화된 크롤링 모드 실행")
+            run_enhanced_crawling()
+            
+        elif command == "regions":
+            # 모든 지역 크롤링 실행
+            logger.info("지역 확장 크롤링 모드 실행")
+            run_region_expansion()
+            
+        elif command == "test":
+            # 단일 가게 테스트
+            logger.info("단일 가게 테스트 모드")
+            test_single_store_enhanced()
+            
+        elif command == "stats":
+            # 통계 조회만
+            logger.info("데이터베이스 통계 조회")
+            show_database_stats()
+            
+        elif command == "config":
+            # 설정 정보 출력
+            logger.info("현재 설정 정보:")
+            logger.info(f"  지역: {config.REGIONS[config.TEST_REGION]['name']}")
+            logger.info(f"  좌표: {config.TEST_RECT}")
+            logger.info(f"  키워드: {config.TEST_KEYWORDS}")
+            logger.info(f"  전체 지역 수: {len(config.get_all_regions())}")
+            
         else:
-            print("사용법: python main.py [test|db|keywords|full]")
-            print("  test: 단일 가게 크롤링 테스트")
-            print("  db: 데이터베이스 기능 테스트")
-            print("  keywords: 모든 키워드 검색 결과 테스트")
-            print("  full: 전체 MVP 크롤링 실행")
-            print("")
-            print("현재 설정:")
-            print(f"  지역: {config.REGIONS[config.TEST_REGION]['name']}")
-            print(f"  키워드: {config.TEST_KEYWORDS}")
+            print("사용법:")
+            print("  python main.py enhanced    # 강화된 크롤링 실행")
+            print("  python main.py regions     # 모든 지역 크롤링")
+            print("  python main.py test        # 단일 가게 테스트")
+            print("  python main.py stats       # 통계 조회")
+            print("  python main.py config      # 설정 정보 출력")
     else:
-        run_mvp_crawling()
-
-def run_mvp_crawling():
-    """MVP 크롤링 실행"""
-    crawler = None
-    db = None
-    
-    try:
-        logger.info("=== Refill Spot 크롤링 시작 (MVP) ===")
-        
-        # 크롤러 초기화
-        crawler = DiningCodeCrawler()
-        
-        # 데이터베이스 초기화
-        db = DatabaseManager()
-        db.create_tables()
-        
-        all_stores = []
-        
-        # 기본 키워드로 크롤링
-        for keyword in config.KEYWORDS[:2]:  # MVP에서는 처음 2개만
-            logger.info(f"키워드 '{keyword}' 크롤링 시작")
-            
-            # 목록 수집
-            stores = crawler.get_store_list(keyword, config.TEST_RECT)
-            logger.info(f"키워드 '{keyword}': {len(stores)}개 가게 발견")
-            
-            if not stores:
-                continue
-            
-            # 상세 정보 수집 (MVP에서는 처음 5개만)
-            detailed_stores = []
-            for i, store in enumerate(stores[:5]):  
-                try:
-                    logger.info(f"상세 정보 수집 {i+1}/{min(5, len(stores))}: {store.get('name')}")
-                    detailed_store = crawler.get_store_detail(store)
-                    detailed_stores.append(detailed_store)
-                    
-                except Exception as e:
-                    logger.error(f"상세 정보 수집 실패: {store.get('name')} - {e}")
-                    continue
-            
-            all_stores.extend(detailed_stores)
-        
-        if not all_stores:
-            logger.warning("수집된 데이터가 없습니다")
-            return
-        
-        # 데이터 정제
-        processed_stores = process_crawled_data(all_stores)
-        
-        if not processed_stores:
-            logger.warning("정제 후 유효한 데이터가 없습니다")
-            return
-        
-        # CSV 저장
-        df = pd.DataFrame(processed_stores)
-        df.to_csv('mvp_crawling_result.csv', index=False, encoding='utf-8-sig')
-        logger.info(f"CSV 저장 완료: mvp_crawling_result.csv ({len(processed_stores)}개 가게)")
-        
-        # 데이터베이스 저장
-        db.save_crawled_data(processed_stores)
-        logger.info("데이터베이스 저장 완료")
-        
-        # 결과 요약
-        logger.info("=== 크롤링 결과 요약 ===")
-        logger.info(f"총 수집 가게 수: {len(processed_stores)}")
-        logger.info(f"좌표 있는 가게: {sum(1 for s in processed_stores if s['position_lat'])}")
-        logger.info(f"전화번호 있는 가게: {sum(1 for s in processed_stores if s['phone_number'])}")
-        logger.info(f"평점 있는 가게: {sum(1 for s in processed_stores if s['diningcode_rating'])}")
-        
-        # 카테고리 분포
-        all_categories = []
-        for store in processed_stores:
-            all_categories.extend(store.get('raw_categories_diningcode', []))
-        
-        from collections import Counter
-        category_count = Counter(all_categories)
-        logger.info("주요 카테고리:")
-        for category, count in category_count.most_common(10):
-            logger.info(f"  {category}: {count}개")
-        
-    except Exception as e:
-        logger.error(f"크롤링 중 오류 발생: {e}")
-        raise
-        
-    finally:
-        if crawler:
-            crawler.close()
-        if db:
-            db.close()
-        logger.info("=== 크롤링 완료 ===")
-
-def test_single_store():
-    """단일 가게 테스트"""
-    crawler = None
-    
-    try:
-        logger.info("=== 단일 가게 테스트 ===")
-        crawler = DiningCodeCrawler()
-        
-        # 목록에서 첫 번째 가게만
-        stores = crawler.get_store_list("무한리필", config.TEST_RECT)
-        if stores:
-            first_store = stores[0]
-            detailed_store = crawler.get_store_detail(first_store)
-            
-            logger.info("=== 테스트 결과 ===")
-            for key, value in detailed_store.items():
-                logger.info(f"{key}: {value}")
-                
-    except Exception as e:
-        logger.error(f"단일 가게 테스트 실패: {e}")
-    finally:
-        if crawler:
-            crawler.close()
-
-if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test_single_store()
-    else:
-        run_mvp_crawling()
+        # 기본 실행: 강화된 크롤링
+        logger.info("기본 모드: 강화된 크롤링 실행")
+        run_enhanced_crawling()
