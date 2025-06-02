@@ -1,6 +1,6 @@
 """
 다이닝코드 무한리필 가게 크롤링 메인 스크립트
-2단계: 강화된 파싱 및 성능 최적화 버전
+3단계: 데이터 품질 고도화 버전 (지오코딩, 가격정규화, 카테고리매핑, 중복제거)
 """
 
 import logging
@@ -13,6 +13,7 @@ from datetime import datetime
 import config
 from crawler import DiningCodeCrawler
 from database import DatabaseManager
+from data_enhancement import DataEnhancer  # 3단계 고도화 모듈
 
 # 로깅 설정
 logging.basicConfig(
@@ -284,13 +285,13 @@ def normalize_price_info(store: Dict) -> Dict:
     return price_info
 
 def run_enhanced_crawling():
-    """강화된 크롤링 실행"""
+    """강화된 크롤링 실행 (3단계: 데이터 품질 고도화 포함)"""
     crawler = None
     db = None
     monitor = CrawlingProgressMonitor()
     
     try:
-        logger.info("=== Refill Spot 크롤링 시작 (강화된 버전) ===")
+        logger.info("=== Refill Spot 크롤링 시작 (3단계 고도화 버전) ===")
         
         # 크롤러 초기화
         crawler = DiningCodeCrawler()
@@ -335,13 +336,6 @@ def run_enhanced_crawling():
                 detailed_stores = process_stores_batch(crawler, stores, monitor)
                 all_stores.extend(detailed_stores)
                 
-                # 키워드별 중간 저장 (메모리 효율성)
-                if detailed_stores:
-                    processed_data = process_crawled_data_enhanced(detailed_stores)
-                    if processed_data:
-                        db.save_crawled_data(processed_data, keyword, rect)
-                        logger.info(f"키워드 '{keyword}' 데이터 저장 완료: {len(processed_data)}개")
-                
                 monitor.complete_keyword()
                 
                 # 키워드 간 휴식 시간
@@ -351,6 +345,58 @@ def run_enhanced_crawling():
                 logger.error(f"키워드 '{keyword}' 처리 중 오류: {e}")
                 monitor.complete_keyword()
                 continue
+        
+        # 3단계 고도화: 데이터 품질 강화
+        if all_stores:
+            logger.info("=== 3단계 데이터 품질 강화 시작 ===")
+            
+            # 데이터 강화 실행
+            enhancer = DataEnhancer()
+            enhanced_stores, enhancement_stats = enhancer.enhance_stores_data(all_stores)
+            
+            # 강화 결과 로깅
+            logger.info("=== 데이터 강화 완료 ===")
+            logger.info(f"원본 가게 수: {enhancement_stats.total_stores}")
+            logger.info(f"최종 가게 수: {len(enhanced_stores)}")
+            logger.info(f"지오코딩 성공: {enhancement_stats.geocoding_success}/{enhancement_stats.total_stores}")
+            logger.info(f"가격 정규화: {enhancement_stats.price_normalized}/{enhancement_stats.total_stores}")
+            logger.info(f"카테고리 매핑: {enhancement_stats.categories_mapped}/{enhancement_stats.total_stores}")
+            logger.info(f"중복 제거: {enhancement_stats.duplicates_removed}개")
+            logger.info(f"강화 처리 시간: {enhancement_stats.processing_time:.2f}초")
+            
+            # 강화된 데이터 저장
+            if enhanced_stores:
+                processed_data = process_crawled_data_enhanced(enhanced_stores)
+                if processed_data:
+                    db.save_crawled_data(processed_data, "enhanced_crawling", rect)
+                    logger.info(f"강화된 데이터 저장 완료: {len(processed_data)}개")
+            
+            # 강화 통계 상세 정보
+            enhancement_summary = enhancer.get_enhancement_summary()
+            logger.info("=== 강화 통계 상세 ===")
+            logger.info(f"좌표 완성도: {enhancement_summary.get('geocoding_rate', 0):.1f}%")
+            logger.info(f"가격 정규화율: {enhancement_summary.get('price_normalization_rate', 0):.1f}%")
+            logger.info(f"카테고리 매핑율: {enhancement_summary.get('category_mapping_rate', 0):.1f}%")
+            logger.info(f"중복 제거율: {enhancement_summary.get('duplicate_removal_rate', 0):.1f}%")
+            
+            # 지오코딩 상세 통계
+            geocoding_stats = enhancement_summary.get('geocoding_stats', {})
+            if geocoding_stats:
+                logger.info("=== 지오코딩 통계 ===")
+                logger.info(f"카카오 API 성공률: {geocoding_stats.get('kakao_rate', 0):.1f}%")
+                logger.info(f"네이버 API 성공률: {geocoding_stats.get('naver_rate', 0):.1f}%")
+                logger.info(f"전체 성공률: {geocoding_stats.get('success_rate', 0):.1f}%")
+            
+            # 가격 정규화 상세 통계
+            price_stats = enhancement_summary.get('price_stats', {})
+            if price_stats:
+                logger.info("=== 가격 정규화 통계 ===")
+                logger.info(f"단일 가격: {price_stats.get('single_price', 0)}개")
+                logger.info(f"범위 가격: {price_stats.get('range_price', 0)}개")
+                logger.info(f"시간대별 가격: {price_stats.get('time_based_price', 0)}개")
+                logger.info(f"조건부 가격: {price_stats.get('conditional_price', 0)}개")
+                logger.info(f"가격 문의: {price_stats.get('inquiry_price', 0)}개")
+                logger.info(f"정규화 성공률: {price_stats.get('success_rate', 0):.1f}%")
         
         # 최종 결과 요약
         summary = monitor.get_summary()
@@ -374,7 +420,7 @@ def run_enhanced_crawling():
             logger.info(f"가격 정보 보유: {basic.get('stores_with_price', 0)}개")
             logger.info(f"평균 평점: {basic.get('avg_rating', 0):.2f}")
         
-        return all_stores
+        return enhanced_stores if 'enhanced_stores' in locals() else all_stores
         
     except Exception as e:
         logger.error(f"크롤링 실행 중 오류: {e}")
@@ -808,6 +854,120 @@ def show_database_stats():
         if db:
             db.close()
 
+def test_stage3_enhancement():
+    """3단계 고도화 기능 테스트"""
+    logger.info("=== 3단계 고도화 기능 테스트 시작 ===")
+    
+    try:
+        # 테스트용 샘플 데이터 생성
+        test_stores = [
+            {
+                'name': '맛있는 삼겹살집',
+                'address': '서울 강남구 테헤란로 123',
+                'price': '1만5천원',
+                'raw_categories_diningcode': ['#삼겹살무한리필', '#고기', '#강남맛집'],
+                'diningcode_place_id': 'test1',
+                'menu_items': ['삼겹살', '목살', '갈비살']
+            },
+            {
+                'name': '맛있는삼겹살집',  # 중복 (띄어쓰기 차이)
+                'address': '서울 강남구 테헤란로 125',
+                'price': '15000원',
+                'raw_categories_diningcode': ['#무한리필', '#삼겹살'],
+                'diningcode_place_id': 'test2',
+                'phone_number': '02-123-4567'
+            },
+            {
+                'name': '초밥뷔페 스시로',
+                'address': '서울 강남구 역삼동',  # 좌표 없음
+                'price': '런치 2만원, 디너 3만원',
+                'raw_categories_diningcode': ['#초밥뷔페', '#일식', '#뷔페'],
+                'diningcode_place_id': 'test3',
+                'menu_items': ['초밥', '사시미', '우동']
+            },
+            {
+                'name': '고기천국',
+                'address': '서울 강남구 논현동',
+                'price': '2만원대',
+                'raw_categories_diningcode': ['#소고기무한리필', '#한우', '#구이'],
+                'diningcode_place_id': 'test4',
+                'position_lat': 37.5129,
+                'position_lng': 127.0426
+            }
+        ]
+        
+        # 데이터 강화 실행
+        from data_enhancement import DataEnhancer
+        enhancer = DataEnhancer()
+        
+        logger.info(f"테스트 데이터: {len(test_stores)}개 가게")
+        
+        enhanced_stores, stats = enhancer.enhance_stores_data(test_stores)
+        
+        # 결과 출력
+        logger.info("=== 강화 결과 ===")
+        logger.info(f"원본 가게 수: {stats.total_stores}")
+        logger.info(f"최종 가게 수: {len(enhanced_stores)}")
+        logger.info(f"지오코딩 성공: {stats.geocoding_success}")
+        logger.info(f"가격 정규화: {stats.price_normalized}")
+        logger.info(f"카테고리 매핑: {stats.categories_mapped}")
+        logger.info(f"중복 제거: {stats.duplicates_removed}")
+        
+        # 개별 가게 결과 확인
+        for i, store in enumerate(enhanced_stores):
+            logger.info(f"\n=== 가게 {i+1}: {store.get('name')} ===")
+            logger.info(f"주소: {store.get('address')}")
+            logger.info(f"좌표: {store.get('position_lat')}, {store.get('position_lng')}")
+            
+            # 지오코딩 정보
+            if store.get('geocoding_source'):
+                logger.info(f"지오코딩 소스: {store.get('geocoding_source')}")
+                logger.info(f"지오코딩 신뢰도: {store.get('geocoding_confidence', 0):.2f}")
+            
+            # 정규화된 가격 정보
+            norm_price = store.get('normalized_price', {})
+            if norm_price:
+                logger.info(f"가격 타입: {norm_price.get('price_type')}")
+                logger.info(f"가격 범위: {norm_price.get('min_price')} ~ {norm_price.get('max_price')}")
+                logger.info(f"가격 신뢰도: {norm_price.get('confidence', 0):.2f}")
+                if norm_price.get('time_based'):
+                    logger.info(f"시간대별 가격: {norm_price.get('time_based')}")
+                if norm_price.get('conditions'):
+                    logger.info(f"가격 조건: {norm_price.get('conditions')}")
+            
+            # 표준 카테고리
+            std_categories = store.get('standard_categories', [])
+            if std_categories:
+                logger.info(f"표준 카테고리: {std_categories}")
+        
+        # 강화 통계 상세 정보
+        summary = enhancer.get_enhancement_summary()
+        logger.info("\n=== 강화 통계 상세 ===")
+        logger.info(f"좌표 완성도: {summary.get('geocoding_rate', 0):.1f}%")
+        logger.info(f"가격 정규화율: {summary.get('price_normalization_rate', 0):.1f}%")
+        logger.info(f"카테고리 매핑율: {summary.get('category_mapping_rate', 0):.1f}%")
+        logger.info(f"중복 제거율: {summary.get('duplicate_removal_rate', 0):.1f}%")
+        
+        logger.info("=== 3단계 고도화 기능 테스트 완료 ===")
+        return enhanced_stores
+        
+    except Exception as e:
+        logger.error(f"3단계 고도화 테스트 중 오류: {e}")
+        return []
+
+def run_stage3_crawling():
+    """3단계 고도화 크롤링 실행 (카카오 API 사용)"""
+    logger.info("=== 3단계 고도화 크롤링 실행 ===")
+    
+    # API 키 확인
+    if not config.KAKAO_API_KEY:
+        logger.warning("카카오 지오코딩 API 키가 설정되지 않았습니다.")
+        logger.info("카카오 API 키를 config.py에 설정해주세요.")
+        logger.info("API 키 없이도 가격 정규화, 카테고리 매핑, 중복 제거는 동작합니다.")
+    
+    # 강화된 크롤링 실행
+    return run_enhanced_crawling()
+
 if __name__ == "__main__":
     import sys
     
@@ -818,6 +978,16 @@ if __name__ == "__main__":
             # 강화된 크롤링 실행
             logger.info("강화된 크롤링 모드 실행")
             run_enhanced_crawling()
+            
+        elif command == "stage3":
+            # 3단계 고도화 크롤링 실행
+            logger.info("3단계 고도화 크롤링 모드 실행")
+            run_stage3_crawling()
+            
+        elif command == "test-stage3":
+            # 3단계 고도화 기능 테스트
+            logger.info("3단계 고도화 기능 테스트 모드")
+            test_stage3_enhancement()
             
         elif command == "regions":
             # 모든 지역 크롤링 실행
@@ -841,15 +1011,24 @@ if __name__ == "__main__":
             logger.info(f"  좌표: {config.TEST_RECT}")
             logger.info(f"  키워드: {config.TEST_KEYWORDS}")
             logger.info(f"  전체 지역 수: {len(config.get_all_regions())}")
+            logger.info(f"  카카오 API 키: {'설정됨' if config.KAKAO_API_KEY else '미설정'}")
             
         else:
             print("사용법:")
-            print("  python main.py enhanced    # 강화된 크롤링 실행")
-            print("  python main.py regions     # 모든 지역 크롤링")
-            print("  python main.py test        # 단일 가게 테스트")
-            print("  python main.py stats       # 통계 조회")
-            print("  python main.py config      # 설정 정보 출력")
+            print("  python main.py enhanced      # 강화된 크롤링 실행")
+            print("  python main.py stage3        # 3단계 고도화 크롤링 실행")
+            print("  python main.py test-stage3   # 3단계 고도화 기능 테스트")
+            print("  python main.py regions       # 모든 지역 크롤링")
+            print("  python main.py test          # 단일 가게 테스트")
+            print("  python main.py stats         # 통계 조회")
+            print("  python main.py config        # 설정 정보 출력")
+            print("")
+            print("3단계 고도화 기능:")
+            print("  - 지오코딩: 좌표 없는 가게의 좌표 자동 생성")
+            print("  - 가격 정규화: 한국어 가격 표현을 숫자로 변환")
+            print("  - 카테고리 매핑: 원본 태그를 표준 카테고리로 변환")
+            print("  - 중복 제거: 유사한 가게들을 자동으로 통합")
     else:
-        # 기본 실행: 강화된 크롤링
-        logger.info("기본 모드: 강화된 크롤링 실행")
-        run_enhanced_crawling()
+        # 기본 실행: 3단계 고도화 크롤링
+        logger.info("기본 모드: 3단계 고도화 크롤링 실행")
+        run_stage3_crawling()

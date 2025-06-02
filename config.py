@@ -17,6 +17,9 @@ DB_NAME = parsed_url.path.lstrip('/') or os.getenv('DB_NAME', 'refill_spot')
 DB_USER = parsed_url.username or os.getenv('DB_USER', 'postgres')
 DB_PASSWORD = parsed_url.password or os.getenv('DB_PASSWORD', 'password123')
 
+# 지오코딩 API 설정 (3단계 고도화 - 카카오 API 전용)
+KAKAO_API_KEY = os.getenv('KAKAO_API_KEY', '')  # 카카오 REST API 키
+
 # 크롤링 설정
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
