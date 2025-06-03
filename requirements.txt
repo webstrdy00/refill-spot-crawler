@@ -12,3 +12,10 @@ tqdm==4.66.1
 # 3단계 고도화 기능 추가 의존성
 dataclasses==0.6  # Python 3.6 호환성 (3.7+에서는 내장)
 typing-extensions==4.8.0  # 타입 힌트 확장
+
+# 4단계: 서울 완전 커버리지 및 자동화 (추가)
+schedule==1.2.0          # 스케줄링 시스템
+threading                # 멀티스레딩 (내장 모듈)
+queue                    # 작업 큐 (내장 모듈)
+dataclasses              # 데이터 클래스 (Python 3.7+ 내장)
+enum                     # 열거형 (내장 모듈)

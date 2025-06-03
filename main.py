@@ -968,67 +968,243 @@ def run_stage3_crawling():
     # 강화된 크롤링 실행
     return run_enhanced_crawling()
 
+def run_stage4_seoul_coverage():
+    """4단계: 서울 25개 구 완전 커버리지 크롤링"""
+    logger.info("=== 4단계: 서울 완전 커버리지 크롤링 시작 ===")
+    
+    try:
+        from seoul_districts import SeoulDistrictManager
+        from seoul_scheduler import SeoulCrawlingScheduler
+        
+        # 서울 구 관리자 초기화
+        district_manager = SeoulDistrictManager()
+        
+        # 서울 커버리지 현황 확인
+        stats = district_manager.get_seoul_coverage_stats()
+        logger.info(f"서울 커버리지 현황:")
+        logger.info(f"  총 구 수: {stats['total_districts']}")
+        logger.info(f"  완료율: {stats['completion_rate']:.1f}%")
+        logger.info(f"  예상 총 가게 수: {stats['total_expected_stores']:,}개")
+        
+        # 미완료 구 목록
+        incomplete_districts = district_manager.get_incomplete_districts()
+        logger.info(f"미완료 구: {len(incomplete_districts)}개")
+        
+        if not incomplete_districts:
+            logger.info("모든 구의 크롤링이 완료되었습니다!")
+            return
+        
+        # 우선순위별 처리
+        for priority in range(1, 6):
+            priority_districts = [d for d in incomplete_districts if d.priority == priority]
+            if not priority_districts:
+                continue
+                
+            logger.info(f"=== Tier {priority} 구 처리 시작 ===")
+            
+            for district in priority_districts:
+                logger.info(f"{district.name} 크롤링 시작...")
+                
+                # 구별 크롤링 실행
+                result = run_district_crawling(district)
+                
+                if result['success']:
+                    district_manager.update_district_status(
+                        district.name, "완료", result['stores_processed']
+                    )
+                    logger.info(f"{district.name} 완료: {result['stores_processed']}개 가게")
+                else:
+                    district_manager.update_district_status(district.name, "오류")
+                    logger.error(f"{district.name} 실패: {result['error']}")
+                
+                # 구간 휴식 (API 부하 방지)
+                time.sleep(30)
+        
+        # 최종 통계
+        final_stats = district_manager.get_seoul_coverage_stats()
+        logger.info(f"=== 4단계 크롤링 완료 ===")
+        logger.info(f"최종 완료율: {final_stats['completion_rate']:.1f}%")
+        logger.info(f"총 처리 가게: {final_stats['total_expected_stores']:,}개")
+        
+    except Exception as e:
+        logger.error(f"4단계 크롤링 오류: {e}")
+        raise
+
+def run_district_crawling(district_info) -> Dict:
+    """개별 구 크롤링 실행"""
+    try:
+        # 기존 설정 백업
+        original_region = getattr(config, 'TEST_REGION', None)
+        original_rect = getattr(config, 'TEST_RECT', None)
+        original_keywords = getattr(config, 'TEST_KEYWORDS', None)
+        
+        # 구별 설정으로 변경
+        config.TEST_REGION = district_info.name
+        config.TEST_RECT = district_info.rect
+        config.TEST_KEYWORDS = district_info.keywords
+        
+        logger.info(f"{district_info.name} 설정:")
+        logger.info(f"  검색 영역: {district_info.rect}")
+        logger.info(f"  키워드 수: {len(district_info.keywords)}")
+        logger.info(f"  예상 가게: {district_info.expected_stores}개")
+        
+        # 크롤링 실행
+        stores = run_enhanced_crawling()
+        
+        return {
+            'success': True,
+            'stores_found': len(stores) if stores else 0,
+            'stores_processed': len(stores) if stores else 0,
+            'district': district_info.name
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+            'district': district_info.name
+        }
+        
+    finally:
+        # 설정 복원
+        if original_region:
+            config.TEST_REGION = original_region
+        if original_rect:
+            config.TEST_RECT = original_rect
+        if original_keywords:
+            config.TEST_KEYWORDS = original_keywords
+
+def start_seoul_scheduler():
+    """서울 자동 스케줄러 시작"""
+    logger.info("=== 서울 자동 스케줄러 시작 ===")
+    
+    try:
+        from seoul_districts import SeoulDistrictManager
+        from seoul_scheduler import SeoulCrawlingScheduler
+        
+        # 구 관리자 및 스케줄러 초기화
+        district_manager = SeoulDistrictManager()
+        scheduler = SeoulCrawlingScheduler(district_manager)
+        
+        # 스케줄러 시작 (무한 루프)
+        scheduler.start_scheduler()
+        
+    except KeyboardInterrupt:
+        logger.info("사용자에 의해 스케줄러가 중지되었습니다.")
+    except Exception as e:
+        logger.error(f"스케줄러 오류: {e}")
+        raise
+
+def test_stage4_system():
+    """4단계 시스템 테스트"""
+    logger.info("=== 4단계 시스템 테스트 ===")
+    
+    try:
+        from seoul_districts import SeoulDistrictManager, test_seoul_district_system
+        from seoul_scheduler import test_seoul_scheduler
+        
+        # 1. 서울 구 시스템 테스트
+        logger.info("1. 서울 구 시스템 테스트")
+        test_seoul_district_system()
+        
+        # 2. 스케줄러 시스템 테스트
+        logger.info("2. 스케줄러 시스템 테스트")
+        test_seoul_scheduler()
+        
+        # 3. 단일 구 크롤링 테스트
+        logger.info("3. 단일 구 크롤링 테스트")
+        district_manager = SeoulDistrictManager()
+        test_district = district_manager.get_district_info("강남구")
+        
+        if test_district:
+            result = run_district_crawling(test_district)
+            logger.info(f"테스트 결과: {result}")
+        
+        logger.info("4단계 시스템 테스트 완료")
+        
+    except Exception as e:
+        logger.error(f"4단계 테스트 오류: {e}")
+
+def show_seoul_coverage_dashboard():
+    """서울 커버리지 대시보드 표시"""
+    try:
+        from seoul_districts import SeoulDistrictManager
+        
+        district_manager = SeoulDistrictManager()
+        stats = district_manager.get_seoul_coverage_stats()
+        
+        print("\n" + "="*60)
+        print("🗺️  서울 25개 구 커버리지 대시보드")
+        print("="*60)
+        
+        print(f"📊 전체 현황:")
+        print(f"   총 구 수: {stats['total_districts']}개")
+        print(f"   완료: {stats['completed']}개")
+        print(f"   진행중: {stats['in_progress']}개")
+        print(f"   대기: {stats['pending']}개")
+        print(f"   오류: {stats['error']}개")
+        print(f"   완료율: {stats['completion_rate']:.1f}%")
+        print(f"   예상 총 가게: {stats['total_expected_stores']:,}개")
+        
+        print(f"\n🏆 티어별 현황:")
+        for tier, info in stats['tier_breakdown'].items():
+            tier_num = tier.split('_')[1]
+            print(f"   Tier {tier_num}: {info['completed']}/{info['count']}개 완료, 예상 {info['expected_stores']}개 가게")
+            print(f"     구 목록: {', '.join(info['districts'])}")
+        
+        # 미완료 구 목록
+        incomplete = district_manager.get_incomplete_districts()
+        if incomplete:
+            print(f"\n⏳ 미완료 구 ({len(incomplete)}개):")
+            for district in incomplete[:10]:  # 최대 10개만
+                print(f"   {district.name}: {district.status}, 예상 {district.expected_stores}개")
+        
+        print("="*60)
+        
+    except Exception as e:
+        logger.error(f"대시보드 표시 오류: {e}")
+
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1:
         command = sys.argv[1]
         
-        if command == "enhanced":
-            # 강화된 크롤링 실행
-            logger.info("강화된 크롤링 모드 실행")
+        if command == "mvp":
+            run_mvp_crawling()
+        elif command == "enhanced":
             run_enhanced_crawling()
-            
-        elif command == "stage3":
-            # 3단계 고도화 크롤링 실행
-            logger.info("3단계 고도화 크롤링 모드 실행")
-            run_stage3_crawling()
-            
-        elif command == "test-stage3":
-            # 3단계 고도화 기능 테스트
-            logger.info("3단계 고도화 기능 테스트 모드")
-            test_stage3_enhancement()
-            
-        elif command == "regions":
-            # 모든 지역 크롤링 실행
-            logger.info("지역 확장 크롤링 모드 실행")
+        elif command == "expansion":
             run_region_expansion()
-            
-        elif command == "test":
-            # 단일 가게 테스트
-            logger.info("단일 가게 테스트 모드")
-            test_single_store_enhanced()
-            
+        elif command == "stage3":
+            run_stage3_crawling()
+        elif command == "stage4":
+            run_stage4_seoul_coverage()
+        elif command == "seoul-scheduler":
+            start_seoul_scheduler()
+        elif command == "test-stage4":
+            test_stage4_system()
+        elif command == "seoul-dashboard":
+            show_seoul_coverage_dashboard()
         elif command == "stats":
-            # 통계 조회만
-            logger.info("데이터베이스 통계 조회")
             show_database_stats()
-            
-        elif command == "config":
-            # 설정 정보 출력
-            logger.info("현재 설정 정보:")
-            logger.info(f"  지역: {config.REGIONS[config.TEST_REGION]['name']}")
-            logger.info(f"  좌표: {config.TEST_RECT}")
-            logger.info(f"  키워드: {config.TEST_KEYWORDS}")
-            logger.info(f"  전체 지역 수: {len(config.get_all_regions())}")
-            logger.info(f"  카카오 API 키: {'설정됨' if config.KAKAO_API_KEY else '미설정'}")
-            
+        elif command == "test-single":
+            test_single_store_enhanced()
+        elif command == "test-stage3":
+            test_stage3_enhancement()
         else:
             print("사용법:")
-            print("  python main.py enhanced      # 강화된 크롤링 실행")
-            print("  python main.py stage3        # 3단계 고도화 크롤링 실행")
-            print("  python main.py test-stage3   # 3단계 고도화 기능 테스트")
-            print("  python main.py regions       # 모든 지역 크롤링")
-            print("  python main.py test          # 단일 가게 테스트")
-            print("  python main.py stats         # 통계 조회")
-            print("  python main.py config        # 설정 정보 출력")
-            print("")
-            print("3단계 고도화 기능:")
-            print("  - 지오코딩: 좌표 없는 가게의 좌표 자동 생성")
-            print("  - 가격 정규화: 한국어 가격 표현을 숫자로 변환")
-            print("  - 카테고리 매핑: 원본 태그를 표준 카테고리로 변환")
-            print("  - 중복 제거: 유사한 가게들을 자동으로 통합")
+            print("  python main.py mvp              # MVP 크롤링")
+            print("  python main.py enhanced         # 강화된 크롤링")
+            print("  python main.py expansion        # 지역 확장 크롤링")
+            print("  python main.py stage3           # 3단계 고도화 크롤링")
+            print("  python main.py stage4           # 4단계 서울 완전 커버리지")
+            print("  python main.py seoul-scheduler  # 서울 자동 스케줄러 시작")
+            print("  python main.py test-stage4      # 4단계 시스템 테스트")
+            print("  python main.py seoul-dashboard  # 서울 커버리지 대시보드")
+            print("  python main.py stats            # 데이터베이스 통계")
+            print("  python main.py test-single      # 단일 가게 테스트")
+            print("  python main.py test-stage3      # 3단계 기능 테스트")
     else:
-        # 기본 실행: 3단계 고도화 크롤링
-        logger.info("기본 모드: 3단계 고도화 크롤링 실행")
-        run_stage3_crawling()
+        # 기본 실행: 강화된 크롤링
+        run_enhanced_crawling()
