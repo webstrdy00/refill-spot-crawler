@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: refill_spot
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 12345
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
     ports:
       - "5432:5432"
     volumes:
@@ -35,6 +36,26 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 
+  # 5단계 성능 최적화: Redis 캐시 서버
+  redis:
+    image: redis:7-alpine
+    container_name: refill_spot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendonly yes
+      --appendfsync everysec
+
 volumes:
   postgres_data:
   pgadmin_data:
+  redis_data:

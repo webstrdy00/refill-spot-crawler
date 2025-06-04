@@ -1,13 +1,15 @@
-selenium==4.16.0
+selenium==4.15.2
 beautifulsoup4==4.12.2
 requests==2.31.0
-pandas==2.1.4
+pandas==2.1.3
 numpy==1.26.2
 psycopg2-binary==2.9.9
 shapely==2.0.2
 geojson==3.1.0
 python-dotenv==1.0.0
 tqdm==4.66.1
+lxml==4.9.3
+Pillow==10.1.0
 
 # 3단계 고도화 기능 추가 의존성
 dataclasses==0.6  # Python 3.6 호환성 (3.7+에서는 내장)
@@ -19,3 +21,15 @@ threading                # 멀티스레딩 (내장 모듈)
 queue                    # 작업 큐 (내장 모듈)
 dataclasses              # 데이터 클래스 (Python 3.7+ 내장)
 enum                     # 열거형 (내장 모듈)
+
+# 3단계 고도화 의존성
+geopy==2.4.0
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.23.0
+
+# 5단계 성능 최적화 의존성
+redis==5.0.1
+psutil==5.9.6
+aiohttp==3.9.1
+asyncio==3.4.3
+multiprocessing-logging==0.3.4

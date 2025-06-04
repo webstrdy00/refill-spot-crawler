@@ -204,6 +204,9 @@ class DiningCodeCrawler:
             
             # 5. JavaScript에서 데이터 추출 시도
             try:
+                # 더보기 버튼 클릭으로 추가 결과 로드
+                self._load_more_results()
+                
                 # localStorage에서 listData 추출
                 list_data = self.driver.execute_script("return localStorage.getItem('listData');")
                 if list_data:
@@ -334,6 +337,68 @@ class DiningCodeCrawler:
             
         return stores
     
+    def _load_more_results(self):
+        """더보기 버튼을 클릭하여 추가 결과 로드"""
+        try:
+            max_attempts = 3  # 최대 3번까지 더보기 클릭
+            
+            for attempt in range(max_attempts):
+                try:
+                    # 더보기 버튼 찾기 (여러 가능한 셀렉터 시도)
+                    more_button_selectors = [
+                        "button[class*='more']",
+                        "button[class*='More']", 
+                        "a[class*='more']",
+                        "div[class*='more']",
+                        ".btn-more",
+                        ".more-btn",
+                        "[data-testid*='more']"
+                    ]
+                    
+                    more_button = None
+                    for selector in more_button_selectors:
+                        try:
+                            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                            for element in elements:
+                                if element.is_displayed() and element.is_enabled():
+                                    text = element.text.lower()
+                                    if any(keyword in text for keyword in ['더보기', 'more', '더 보기', '추가']):
+                                        more_button = element
+                                        break
+                            if more_button:
+                                break
+                        except:
+                            continue
+                    
+                    if more_button:
+                        logger.info(f"더보기 버튼 발견 (시도 {attempt + 1}): {more_button.text}")
+                        
+                        # 버튼이 보이도록 스크롤
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", more_button)
+                        time.sleep(1)
+                        
+                        # 클릭
+                        more_button.click()
+                        logger.info("더보기 버튼 클릭 완료")
+                        
+                        # 로딩 대기
+                        time.sleep(2)
+                        
+                        # 새로운 결과가 로드되었는지 확인
+                        new_poi_count = len(self.driver.find_elements(By.CLASS_NAME, "PoiBlock"))
+                        logger.info(f"더보기 후 총 {new_poi_count}개 가게 발견")
+                        
+                    else:
+                        logger.info(f"더보기 버튼을 찾을 수 없음 (시도 {attempt + 1})")
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"더보기 버튼 클릭 실패 (시도 {attempt + 1}): {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.warning(f"더보기 결과 로드 실패: {e}")
+
     def get_store_detail(self, store_info: Dict) -> Dict:
         """가게 상세 정보 수집 (강화된 파싱)"""
         def _get_detail():
