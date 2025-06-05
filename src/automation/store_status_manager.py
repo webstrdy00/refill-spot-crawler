@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import phonenumbers
 from phonenumbers import NumberParseException
-from database import DatabaseManager
+from ..core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

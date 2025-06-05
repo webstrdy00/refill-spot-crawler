@@ -16,8 +16,8 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import DBSCAN
-from database import DatabaseManager
-from geocoding import GeocodingManager
+from ..core.database import DatabaseManager
+from ..core.geocoding import GeocodingManager
 
 logger = logging.getLogger(__name__)
 

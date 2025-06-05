@@ -23,7 +23,7 @@ import pandas as pd
 from jinja2 import Template
 import sqlite3
 import os
-from database import DatabaseManager
+from ..core.database import DatabaseManager
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)

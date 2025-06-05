@@ -15,13 +15,13 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from database import DatabaseManager
+from ..core.database import DatabaseManager
 
 # 기존 모듈들 import
-from quality_assurance import QualityAssurance, QualityConfig
-from exception_handler import ExceptionHandler, ExceptionConfig
-from store_status_manager import StoreStatusManager, StatusConfig
-from notification_system import NotificationSystem, NotificationConfig
+from .quality_assurance import QualityAssurance, QualityConfig
+from .exception_handler import ExceptionHandler, ExceptionConfig
+from .store_status_manager import StoreStatusManager, StatusConfig
+from .notification_system import NotificationSystem, NotificationConfig
 
 # 로깅 설정
 logging.basicConfig(

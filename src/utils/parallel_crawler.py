@@ -1,34 +1,33 @@
 """
-5단계 성능 최적화: 멀티프로세싱 병렬 크롤링 시스템
-- 구별 병렬 처리로 8-20배 성능 향상
-- 장애 복구 및 무정지 운영
-- 실시간 성능 모니터링
+5단계: 병렬 크롤링 시스템
+멀티프로세싱을 활용한 고성능 크롤링
 """
 
-import multiprocessing as mp
-import time
 import logging
-import json
-import redis
-import psutil
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass, asdict
+import time
+import multiprocessing as mp
+from multiprocessing import Pool, Manager, Queue
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import signal
+from typing import List, Dict, Tuple, Optional
+from datetime import datetime
+import psutil
 import os
-import traceback
+import signal
+import sys
+from dataclasses import dataclass, asdict
+import json
+from pathlib import Path
 
-from crawler import DiningCodeCrawler
-from database import DatabaseManager
-from data_enhancement import DataEnhancer
-import config
-from seoul_districts import SEOUL_DISTRICTS
+# 프로젝트 모듈 import
+from ..core.database import DatabaseManager
+from ..core.crawler import DiningCodeCrawler
+from ..core.caching_system import CacheManager
+from .seoul_districts import SEOUL_DISTRICTS
 
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('parallel_crawler.log', encoding='utf-8'),
         logging.StreamHandler()

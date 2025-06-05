@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 import re
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from database import DatabaseManager
+from ..core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

@@ -9,14 +9,20 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
+import os
+
+# 프로젝트 루트를 Python 경로에 추가
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # 테스트할 모듈들 import
 try:
-    from quality_assurance import QualityAssurance, QualityConfig
-    from exception_handler import ExceptionHandler, ExceptionConfig
-    from store_status_manager import StoreStatusManager, StatusConfig
-    from notification_system import NotificationSystem, NotificationConfig
-    from automated_operations import AutomatedOperations, OperationConfig
+    from src.automation.quality_assurance import QualityAssurance, QualityConfig
+    from src.automation.exception_handler import ExceptionHandler, ExceptionConfig
+    from src.automation.store_status_manager import StoreStatusManager, StatusConfig
+    from src.automation.notification_system import NotificationSystem, NotificationConfig
+    from src.automation.automated_operations import AutomatedOperations, OperationConfig
 except ImportError as e:
     print(f"모듈 import 실패: {e}")
     print("필요한 의존성을 설치해주세요: pip install -r requirements.txt")

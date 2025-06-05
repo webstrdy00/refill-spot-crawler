@@ -1,0 +1,45 @@
+{
+  "url": "https://www.diningcode.com/profile.php?rid=sJL6OuwQfW9a",
+  "title": "강남 돼지상회 무한리필 - 강남역 삼겹살, 무한리필 맛집 | 다이닝코드, 빅데이터 맛집검색",
+  "extracted_info": {
+    "평점": [
+      "4.4(25명의\n          평가)",
+      "82점",
+      "4.4점"
+    ]
+  },
+  "found_coordinates": [
+    "위도: 37.500792",
+    "경도: 127.0275564"
+  ],
+  "info_classes": [
+    "Restaurant_MenuPrice",
+    "addr_toggle_btn",
+    "avg_score",
+    "basic-info",
+    "busi-hours",
+    "busi-hours-today",
+    "detail-info",
+    "folder-info",
+    "grade-info",
+    "highlight-score",
+    "info",
+    "menu-info",
+    "near_score",
+    "near_score_area_category",
+    "point-detail",
+    "related_score",
+    "related_score_area_category",
+    "score",
+    "score-info",
+    "score-info-layer",
+    "score-text",
+    "sim_score",
+    "similar_score_percent",
+    "tag",
+    "tags",
+    "taste-tag",
+    "tel",
+    "total_score"
+  ]
+}
