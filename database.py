@@ -59,6 +59,27 @@ class DatabaseManager:
         finally:
             cursor.close()
     
+    def execute_query(self, query: str, params=None):
+        """일반적인 쿼리 실행"""
+        cursor = self.pg_conn.cursor()
+        try:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # SELECT 쿼리인 경우 결과 반환
+            if query.strip().upper().startswith('SELECT'):
+                return cursor.fetchall()
+            else:
+                return cursor.rowcount
+                
+        except Exception as e:
+            logger.error(f"쿼리 실행 실패: {e}")
+            raise
+        finally:
+            cursor.close()
+    
     def create_tables(self):
         """테이블 생성 (init.sql이 이미 실행되었다고 가정)"""
         cursor = self.pg_conn.cursor()
