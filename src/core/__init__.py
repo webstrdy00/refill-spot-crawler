@@ -7,7 +7,7 @@ from .crawler import DiningCodeCrawler
 from .geocoding import GeocodingManager
 from .data_enhancement import DataEnhancer
 from .price_normalizer import PriceNormalizer
-from .caching_system import CacheManager
+from .caching_system import IntelligentCacheManager
 
 __all__ = [
     'DatabaseManager',
@@ -15,5 +15,5 @@ __all__ = [
     'GeocodingManager',
     'DataEnhancer',
     'PriceNormalizer',
-    'CacheManager'
+    'IntelligentCacheManager'
 ] 

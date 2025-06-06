@@ -11,8 +11,8 @@ import json
 import re
 from collections import defaultdict
 
-from geocoding import GeocodingManager, GeocodingResult
-from price_normalizer import PriceNormalizer, PriceInfo
+from .geocoding import GeocodingManager, GeocodingResult
+from .price_normalizer import PriceNormalizer, PriceInfo
 
 logger = logging.getLogger(__name__)
 

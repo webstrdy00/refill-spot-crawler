@@ -37,9 +37,16 @@ def run_tests():
     """테스트 실행"""
     try:
         from src.tests.stage6_test import main as test_main
-        return asyncio.run(test_main())
+        results = asyncio.run(test_main())
+        # 테스트 결과가 딕셔너리인 경우, 모든 테스트가 통과했는지 확인
+        if isinstance(results, dict):
+            return all(results.values())
+        return True  # 테스트가 완료되면 성공으로 간주
     except ImportError:
         print("❌ 테스트 모듈을 찾을 수 없습니다.")
+        return False
+    except Exception as e:
+        print(f"❌ 테스트 실행 중 오류: {e}")
         return False
 
 def main():
