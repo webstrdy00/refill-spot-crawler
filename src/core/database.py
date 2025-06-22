@@ -3,6 +3,9 @@ import psycopg2.extras
 import pandas as pd
 import logging
 from typing import List, Dict, Optional
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
 logger = logging.getLogger(__name__)

@@ -4,22 +4,64 @@
 import psycopg2
 import psycopg2.extras
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import json
 import re
+import os
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DataMigration:
-    def __init__(self, crawler_db_config: Dict, project_db_config: Dict):
+    def __init__(self, crawler_db_config: Union[Dict, str] = None, project_db_config: Union[Dict, str] = None):
         """
         Args:
-            crawler_db_config: 크롤러 DB 연결 정보
-            project_db_config: 프로젝트 DB 연결 정보
+            crawler_db_config: 크롤러 DB 연결 정보 (dict 또는 DATABASE_URL 문자열)
+            project_db_config: 프로젝트 DB 연결 정보 (dict 또는 DATABASE_URL 문자열)
         """
-        self.crawler_conn = psycopg2.connect(**crawler_db_config)
-        self.project_conn = psycopg2.connect(**project_db_config)
+        # 크롤러 DB 연결 설정 (기존 DATABASE_URL 사용)
+        if crawler_db_config is None:
+            crawler_db_config = os.getenv('DATABASE_URL', 
+                                         'postgresql://postgres:12345@localhost:5432/refill_spot_crawler')
+        
+        # 프로젝트 DB 연결 설정 (새로운 PROJECT_DATABASE_URL 사용)
+        if project_db_config is None:
+            project_db_config = os.getenv('PROJECT_DATABASE_URL',
+                                         'postgresql://postgres:your_password@localhost:5432/refill_spot')
+        
+        # 연결 정보 파싱 및 연결
+        self.crawler_conn = self._create_connection(crawler_db_config, "크롤러 DB")
+        self.project_conn = self._create_connection(project_db_config, "프로젝트 DB")
+    
+    def _create_connection(self, db_config: Union[Dict, str], db_name: str):
+        """DB 연결 생성"""
+        try:
+            if isinstance(db_config, str):
+                # DATABASE_URL 형식 파싱
+                parsed = urlparse(db_config)
+                config = {
+                    'host': parsed.hostname,
+                    'port': parsed.port or 5432,
+                    'database': parsed.path[1:] if parsed.path else 'postgres',
+                    'user': parsed.username,
+                    'password': parsed.password
+                }
+                logger.info(f"{db_name} 연결: {config['user']}@{config['host']}:{config['port']}/{config['database']}")
+            else:
+                # Dictionary 형식
+                config = db_config
+                logger.info(f"{db_name} 연결: {config.get('user')}@{config.get('host')}:{config.get('port')}/{config.get('database')}")
+            
+            return psycopg2.connect(**config)
+            
+        except Exception as e:
+            logger.error(f"{db_name} 연결 실패: {e}")
+            raise
         
     def migrate_stores(self, limit: Optional[int] = None):
         """크롤러 DB에서 프로젝트 DB로 가게 정보 마이그레이션"""
@@ -359,34 +401,45 @@ class DataMigration:
         self.project_conn.close()
 
 
-# 사용 예시
-if __name__ == "__main__":
-    # DB 연결 정보
-    crawler_db_config = {
-        'host': 'localhost',
-        'port': 5433,  # 크롤러 DB 포트
-        'database': 'refill_spot_crawler',
-        'user': 'crawler_user',
-        'password': 'crawler_password'
-    }
+def create_migration_from_env():
+    """환경변수에서 마이그레이션 객체 생성"""
+    return DataMigration()
+
+def main():
+    """메인 실행 함수"""
+    import argparse
     
-    project_db_config = {
-        'host': 'localhost',
-        'port': 5432,  # 프로젝트 DB 포트
-        'database': 'refill_spot',
-        'user': 'postgres',
-        'password': 'your_password'
-    }
+    parser = argparse.ArgumentParser(description='크롤링 데이터 마이그레이션')
+    parser.add_argument('--limit', type=int, help='마이그레이션할 가게 수 제한')
+    parser.add_argument('--test', action='store_true', help='테스트 모드 (10개만 마이그레이션)')
+    parser.add_argument('--crawler-db', help='크롤러 DB URL (기본값: 환경변수 DATABASE_URL)')
+    parser.add_argument('--project-db', help='프로젝트 DB URL (기본값: 환경변수 PROJECT_DATABASE_URL)')
     
-    # 마이그레이션 실행
-    migration = DataMigration(crawler_db_config, project_db_config)
+    args = parser.parse_args()
+    
+    # 마이그레이션 객체 생성
+    migration = DataMigration(
+        crawler_db_config=args.crawler_db,
+        project_db_config=args.project_db
+    )
     
     try:
-        # 처음에는 작은 수로 테스트
-        migration.migrate_stores(limit=10)
-        
-        # 전체 마이그레이션
-        # migration.migrate_stores()
-        
+        if args.test:
+            logger.info("🧪 테스트 모드: 10개 가게만 마이그레이션")
+            migration.migrate_stores(limit=10)
+        elif args.limit:
+            logger.info(f"📊 제한 모드: {args.limit}개 가게 마이그레이션")
+            migration.migrate_stores(limit=args.limit)
+        else:
+            logger.info("🚀 전체 마이그레이션 시작")
+            migration.migrate_stores()
+            
+    except Exception as e:
+        logger.error(f"❌ 마이그레이션 실패: {e}")
+        raise
     finally:
-        migration.close() 
+        migration.close()
+
+# 사용 예시
+if __name__ == "__main__":
+    main() 

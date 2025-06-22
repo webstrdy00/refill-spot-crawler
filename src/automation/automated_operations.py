@@ -215,12 +215,12 @@ class AutomatedOperations:
             logger.info("일일 크롤링 시작")
             start_time = datetime.now()
             
-            # 크롤링 실행 (기존 크롤링 시스템 호출)
-            from main import main as run_crawler
+            # 크롤링 실행 (서울 전체 크롤링)
+            from main import run_stage4_seoul_coverage
             
             # 예외 처리와 함께 크롤링 실행
             success = await self.exception_handler.execute_with_exception_handling(
-                run_crawler, "daily_crawling"
+                run_stage4_seoul_coverage, "daily_crawling"
             )
             
             if success:

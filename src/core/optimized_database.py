@@ -18,6 +18,9 @@ from datetime import datetime
 import threading
 import time
 from contextlib import contextmanager
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
 logger = logging.getLogger(__name__)

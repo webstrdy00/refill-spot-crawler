@@ -16,11 +16,29 @@ sys.path.insert(0, str(project_root))
 def run_main_crawler():
     """메인 크롤러 실행"""
     try:
-        from src.utils.main import main
-        return main()
-    except ImportError:
-        print("❌ 크롤러 모듈을 찾을 수 없습니다.")
-        print("src/utils/main.py 파일이 존재하는지 확인해주세요.")
+        # 직접 subprocess로 main.py 실행
+        import subprocess
+        import sys
+        
+        result = subprocess.run([
+            sys.executable, 
+            "src/utils/main.py", 
+            "enhanced"
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ 크롤링 완료!")
+            if result.stdout:
+                print(result.stdout)
+            return True
+        else:
+            print("❌ 크롤링 실패!")
+            if result.stderr:
+                print(result.stderr)
+            return False
+            
+    except Exception as e:
+        print(f"❌ 크롤러 실행 오류: {e}")
         return False
 
 def run_automation():

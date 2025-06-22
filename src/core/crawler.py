@@ -14,6 +14,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from bs4 import BeautifulSoup
 import pandas as pd
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
 

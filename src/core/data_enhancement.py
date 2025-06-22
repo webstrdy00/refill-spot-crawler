@@ -11,8 +11,13 @@ import json
 import re
 from collections import defaultdict
 
-from .geocoding import GeocodingManager, GeocodingResult
-from .price_normalizer import PriceNormalizer, PriceInfo
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
+sys.path.append(os.path.dirname(__file__))
+
+from geocoding import GeocodingManager, GeocodingResult
+from price_normalizer import PriceNormalizer, PriceInfo
 
 logger = logging.getLogger(__name__)
 

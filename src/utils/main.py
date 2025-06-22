@@ -10,6 +10,11 @@ import json
 from typing import List, Dict
 from collections import Counter
 from datetime import datetime
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
+
 import config
 from crawler import DiningCodeCrawler
 from database import DatabaseManager
@@ -1163,6 +1168,16 @@ def show_seoul_coverage_dashboard():
         
     except Exception as e:
         logger.error(f"대시보드 표시 오류: {e}")
+
+def main():
+    """메인 크롤링 함수"""
+    logger.info("=== 리필스팟 크롤러 시작 ===")
+    try:
+        # 기본적으로 서울 전체 크롤링 실행
+        return run_stage4_seoul_coverage()
+    except Exception as e:
+        logger.error(f"크롤링 실행 오류: {e}")
+        return False
 
 if __name__ == "__main__":
     import sys

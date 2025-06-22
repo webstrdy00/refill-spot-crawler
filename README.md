@@ -64,6 +64,13 @@
 - **상태 관리**: 휴업/폐업 가게 자동 감지
 - **알림 시스템**: 실시간 모니터링 및 보고
 
+### 7단계: 데이터 마이그레이션 및 검증 🔄
+
+- **데이터 검증**: 크롤링 데이터 품질 자동 검증
+- **스키마 변환**: 크롤러 DB → 프로젝트 DB 자동 변환
+- **카테고리 매핑**: 상세 카테고리를 표준 카테고리로 매핑
+- **데이터 정제**: 중복 제거, URL 검증, 가격 정규화
+
 ## 📁 프로젝트 구조
 
 ```
@@ -90,7 +97,9 @@ refill-spot-crawler/
 │   │   ├── seoul_scheduler.py       # 스케줄러
 │   │   ├── parallel_crawler.py      # 병렬 크롤러
 │   │   ├── main.py                  # 메인 크롤러
-│   │   └── stage5_main.py          # 5단계 메인
+│   │   ├── stage5_main.py          # 5단계 메인
+│   │   ├── data_migration.py        # 데이터 마이그레이션
+│   │   └── data_validator.py        # 데이터 검증
 │   │
 │   └── 📁 tests/                    # 테스트
 │       ├── stage6_test.py           # 6단계 테스트
@@ -105,7 +114,8 @@ refill-spot-crawler/
 ├── 📁 docs/                         # 문서
 │   ├── README.md                    # 이 파일
 │   ├── STAGE6_AUTOMATION_GUIDE.md   # 6단계 가이드
-│   └── STAGE5_GUIDE.md             # 5단계 가이드
+│   ├── STAGE5_GUIDE.md             # 5단계 가이드
+│   └── DATA_MIGRATION_GUIDE.md     # 데이터 마이그레이션 가이드
 │
 ├── 📁 logs/                         # 로그 파일
 ├── 📁 data/                         # 데이터 파일
@@ -170,10 +180,21 @@ psql -U postgres -f config/init.sql
 # .env 파일 생성
 cp .env.example .env
 
-# 필요한 설정 값 입력
-# - 데이터베이스 연결 정보
-# - API 키 (지오코딩, 알림 등)
-# - 웹훅 URL (Slack, Discord)
+# .env 파일에 다음 내용 추가:
+```
+
+```env
+# 크롤링 DB (기존 설정 유지)
+DATABASE_URL=postgresql://postgres:12345@localhost:5432/refill_spot_crawler
+
+# 메인 프로젝트 DB (Supabase 또는 PostgreSQL)
+PROJECT_DATABASE_URL=postgresql://postgres:your_password@localhost:5432/refill_spot
+# 또는 Supabase의 경우:
+# PROJECT_DATABASE_URL=postgresql://postgres:your_supabase_password@db.your-project.supabase.co:5432/postgres
+
+# 기타 설정
+LOG_LEVEL=INFO
+MIGRATION_BATCH_SIZE=100
 ```
 
 ## 🎮 사용법
@@ -202,6 +223,14 @@ python -m src.automation.store_status_manager
 
 # 알림 시스템 테스트
 python -m src.automation.notification_system
+
+# 데이터 검증 실행
+python src/utils/data_validator.py
+
+# 데이터 마이그레이션 (환경변수 사용)
+python src/utils/data_migration.py --test  # 테스트 (10개만)
+python src/utils/data_migration.py --limit 100  # 100개만
+python src/utils/data_migration.py  # 전체 마이그레이션
 ```
 
 ### 테스트 실행
@@ -212,6 +241,41 @@ python src/tests/stage6_test.py
 
 # 5단계 테스트
 python src/tests/stage5_test.py
+```
+
+## 🔄 데이터 마이그레이션 및 검증 시스템
+
+### 주요 구성요소
+
+#### 1. 데이터 검증 시스템 (`data_validator.py`)
+
+- **기본 통계 확인**: 총 가게 수, 상태별/카테고리별 통계
+- **데이터 품질 검증**: 필수 필드 누락, 이미지 정보 확인
+- **무한리필 데이터 검증**: 리필 확인 상태, 타입별 통계
+- **위치 정보 검증**: 서울 지역 범위, 잘못된 좌표 탐지
+- **중복 데이터 검증**: 이름+주소 중복, 동일 위치 다중 가게
+
+#### 2. 데이터 마이그레이션 시스템 (`data_migration.py`)
+
+- **스키마 변환**: 크롤러 DB (복잡) → 프로젝트 DB (단순)
+- **데이터 가공**: 가격 통합, 무한리필 아이템 추출, 이미지 URL 검증
+- **카테고리 매핑**: 30+ 상세 카테고리를 표준 카테고리로 변환
+- **품질 보장**: 트랜잭션 관리, 로깅, 자동 롤백
+
+### 마이그레이션 프로세스
+
+```bash
+# 1단계: 데이터 검증
+python src/utils/data_validator.py
+
+# 2단계: 테스트 마이그레이션 (10개)
+python src/utils/data_migration.py --test
+
+# 3단계: 제한된 마이그레이션 (100개)
+python src/utils/data_migration.py --limit 100
+
+# 4단계: 전체 마이그레이션
+python src/utils/data_migration.py
 ```
 
 ## 🤖 6단계 자동화 시스템
@@ -254,13 +318,15 @@ python src/tests/stage5_test.py
 
 ### 자동화 스케줄
 
-| 시간       | 작업          | 설명                     |
-| ---------- | ------------- | ------------------------ |
-| 02:00      | 일일 크롤링   | 전체 데이터 업데이트     |
-| 03:00      | 품질 검증     | 데이터 품질 자동 검사    |
-| 04:00      | 상태 확인     | 가게 상태 업데이트       |
-| 09:00 (월) | 주간 보고서   | HTML 보고서 생성 및 발송 |
-| 매 30분    | 상태 모니터링 | 시스템 헬스체크          |
+| 시간       | 작업                | 설명                      |
+| ---------- | ------------------- | ------------------------- |
+| 02:00      | 일일 크롤링         | 전체 데이터 업데이트      |
+| 03:00      | 품질 검증           | 데이터 품질 자동 검사     |
+| 04:00      | 상태 확인           | 가게 상태 업데이트        |
+| 05:00      | 데이터 검증         | 크롤링 데이터 품질 검증   |
+| 06:00 (일) | 데이터 마이그레이션 | 프로젝트 DB로 데이터 이전 |
+| 09:00 (월) | 주간 보고서         | HTML 보고서 생성 및 발송  |
+| 매 30분    | 상태 모니터링       | 시스템 헬스체크           |
 
 ## 📊 모니터링 및 알림
 

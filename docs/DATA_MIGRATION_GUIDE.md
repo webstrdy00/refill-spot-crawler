@@ -37,36 +37,40 @@ python src/utils/data_validator.py
 - 중복 데이터 확인
 - 무한리필 정보 확인
 
-### 2단계: 데이터 마이그레이션
+### 2단계: 환경변수 설정
 
-```python
-from src.utils.data_migration import DataMigration
+```bash
+# .env 파일 생성
+touch .env
+```
 
-# DB 연결 정보 설정
-crawler_db_config = {
-    'host': 'localhost',
-    'port': 5433,  # 크롤러 DB 포트
-    'database': 'refill_spot_crawler',
-    'user': 'crawler_user',
-    'password': 'crawler_password'
-}
+```env
+# 크롤링 DB (기존 설정 유지)
+DATABASE_URL=postgresql://postgres:12345@localhost:5432/refill_spot_crawler
 
-project_db_config = {
-    'host': 'localhost',
-    'port': 5432,  # 프로젝트 DB 포트
-    'database': 'refill_spot',
-    'user': 'postgres',
-    'password': 'your_password'
-}
+# 메인 프로젝트 DB (Supabase 또는 PostgreSQL)
+PROJECT_DATABASE_URL=postgresql://postgres:your_password@localhost:5432/refill_spot
+# 또는 Supabase의 경우:
+# PROJECT_DATABASE_URL=postgresql://postgres:your_supabase_password@db.your-project.supabase.co:5432/postgres
+```
 
-# 마이그레이션 실행
-migration = DataMigration(crawler_db_config, project_db_config)
+### 3단계: 데이터 마이그레이션
 
-# 테스트 (10개만)
-migration.migrate_stores(limit=10)
+```bash
+# 테스트 마이그레이션 (10개만)
+python src/utils/data_migration.py --test
+
+# 제한된 마이그레이션 (100개)
+python src/utils/data_migration.py --limit 100
 
 # 전체 마이그레이션
-migration.migrate_stores()
+python src/utils/data_migration.py
+
+# 커스텀 DB URL 사용 (선택사항)
+python src/utils/data_migration.py \
+  --crawler-db "postgresql://user:pass@host:port/db" \
+  --project-db "postgresql://user:pass@host:port/db" \
+  --test
 ```
 
 ## 데이터 가공 내용

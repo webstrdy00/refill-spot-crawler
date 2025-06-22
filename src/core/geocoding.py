@@ -9,6 +9,9 @@ import time
 import re
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
 logger = logging.getLogger(__name__)

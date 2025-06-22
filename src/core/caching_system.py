@@ -18,6 +18,9 @@ import pickle
 import zlib
 from contextlib import contextmanager
 import threading
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
 logger = logging.getLogger(__name__)
