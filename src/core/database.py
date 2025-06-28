@@ -143,22 +143,79 @@ class DatabaseManager:
         return category_map
     
     def insert_stores_batch(self, stores_data: List[Dict]) -> List[int]:
-        """가게 정보 배치 삽입 (강화된 스키마 반영)"""
+        """가게 정보 배치 삽입/업데이트 (UPSERT 방식)"""
         cursor = self.pg_conn.cursor()
         store_ids = []
         
         try:
-            # stores 테이블 삽입용 데이터 준비
-            store_values = []
+            # 개별 UPSERT 처리 (PostgreSQL ON CONFLICT 사용)
             for store in stores_data:
-                values = (
+                cursor.execute("""
+                    INSERT INTO stores (
+                        name, address, description, position_lat, position_lng, 
+                        position_x, position_y, naver_rating, kakao_rating, diningcode_rating,
+                        open_hours, open_hours_raw, price, refill_items, image_urls,
+                        phone_number, diningcode_place_id, raw_categories_diningcode, status,
+                        menu_items, menu_categories, signature_menu, price_range, average_price,
+                        price_details, break_time, last_order, holiday, main_image,
+                        menu_images, interior_images, review_summary, keywords, atmosphere,
+                        website, social_media, refill_type, refill_conditions, is_confirmed_refill
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (diningcode_place_id) 
+                    DO UPDATE SET
+                        name = EXCLUDED.name,
+                        address = COALESCE(EXCLUDED.address, stores.address),
+                        description = COALESCE(EXCLUDED.description, stores.description),
+                        position_lat = COALESCE(EXCLUDED.position_lat, stores.position_lat),
+                        position_lng = COALESCE(EXCLUDED.position_lng, stores.position_lng),
+                        position_x = COALESCE(EXCLUDED.position_x, stores.position_x),
+                        position_y = COALESCE(EXCLUDED.position_y, stores.position_y),
+                        naver_rating = COALESCE(EXCLUDED.naver_rating, stores.naver_rating),
+                        kakao_rating = COALESCE(EXCLUDED.kakao_rating, stores.kakao_rating),
+                        diningcode_rating = COALESCE(EXCLUDED.diningcode_rating, stores.diningcode_rating),
+                        open_hours = COALESCE(EXCLUDED.open_hours, stores.open_hours),
+                        open_hours_raw = COALESCE(EXCLUDED.open_hours_raw, stores.open_hours_raw),
+                        price = COALESCE(EXCLUDED.price, stores.price),
+                        refill_items = COALESCE(EXCLUDED.refill_items, stores.refill_items),
+                        image_urls = COALESCE(EXCLUDED.image_urls, stores.image_urls),
+                        phone_number = COALESCE(EXCLUDED.phone_number, stores.phone_number),
+                        raw_categories_diningcode = COALESCE(EXCLUDED.raw_categories_diningcode, stores.raw_categories_diningcode),
+                        status = EXCLUDED.status,
+                        menu_items = COALESCE(EXCLUDED.menu_items, stores.menu_items),
+                        menu_categories = COALESCE(EXCLUDED.menu_categories, stores.menu_categories),
+                        signature_menu = COALESCE(EXCLUDED.signature_menu, stores.signature_menu),
+                        price_range = COALESCE(EXCLUDED.price_range, stores.price_range),
+                        average_price = COALESCE(EXCLUDED.average_price, stores.average_price),
+                        price_details = COALESCE(EXCLUDED.price_details, stores.price_details),
+                        break_time = COALESCE(EXCLUDED.break_time, stores.break_time),
+                        last_order = COALESCE(EXCLUDED.last_order, stores.last_order),
+                        holiday = COALESCE(EXCLUDED.holiday, stores.holiday),
+                        main_image = COALESCE(EXCLUDED.main_image, stores.main_image),
+                        menu_images = COALESCE(EXCLUDED.menu_images, stores.menu_images),
+                        interior_images = COALESCE(EXCLUDED.interior_images, stores.interior_images),
+                        review_summary = COALESCE(EXCLUDED.review_summary, stores.review_summary),
+                        keywords = COALESCE(EXCLUDED.keywords, stores.keywords),
+                        atmosphere = COALESCE(EXCLUDED.atmosphere, stores.atmosphere),
+                        website = COALESCE(EXCLUDED.website, stores.website),
+                        social_media = COALESCE(EXCLUDED.social_media, stores.social_media),
+                        refill_type = COALESCE(EXCLUDED.refill_type, stores.refill_type),
+                        refill_conditions = COALESCE(EXCLUDED.refill_conditions, stores.refill_conditions),
+                        is_confirmed_refill = EXCLUDED.is_confirmed_refill,
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING id
+                """, (
                     store.get('name'),
                     store.get('address'),
                     store.get('description'),
                     store.get('position_lat'),
                     store.get('position_lng'),
-                    store.get('position_x'),  # 카카오맵 좌표 (옵션)
-                    store.get('position_y'),  # 카카오맵 좌표 (옵션)
+                    store.get('position_x'),
+                    store.get('position_y'),
                     store.get('naver_rating'),
                     store.get('kakao_rating'),
                     store.get('diningcode_rating'),
@@ -171,7 +228,6 @@ class DatabaseManager:
                     store.get('diningcode_place_id'),
                     store.get('raw_categories_diningcode', []),
                     store.get('status', '운영중'),
-                    # 강화된 필드들 추가
                     store.get('menu_items', []),
                     store.get('menu_categories', []),
                     store.get('signature_menu', []),
@@ -192,37 +248,17 @@ class DatabaseManager:
                     store.get('refill_type', ''),
                     store.get('refill_conditions', ''),
                     store.get('is_confirmed_refill', False)
-                )
-                store_values.append(values)
+                ))
+                
+                # 삽입/업데이트된 ID 수집
+                result = cursor.fetchone()
+                if result:
+                    store_ids.append(result[0])
             
-            # 배치 삽입 (강화된 필드 포함)
-            psycopg2.extras.execute_values(
-                cursor,
-                """
-                INSERT INTO stores (
-                    name, address, description, position_lat, position_lng, 
-                    position_x, position_y, naver_rating, kakao_rating, diningcode_rating,
-                    open_hours, open_hours_raw, price, refill_items, image_urls,
-                    phone_number, diningcode_place_id, raw_categories_diningcode, status,
-                    menu_items, menu_categories, signature_menu, price_range, average_price,
-                    price_details, break_time, last_order, holiday, main_image,
-                    menu_images, interior_images, review_summary, keywords, atmosphere,
-                    website, social_media, refill_type, refill_conditions, is_confirmed_refill
-                ) VALUES %s
-                RETURNING id
-                """,
-                store_values,
-                template=None,
-                page_size=100
-            )
-            
-            # 삽입된 ID들 수집
-            store_ids = [row[0] for row in cursor.fetchall()]
-            
-            logger.info(f"가게 정보 배치 삽입 완료: {len(store_ids)}개")
+            logger.info(f"가게 정보 UPSERT 완료: {len(store_ids)}개 (신규 삽입 또는 업데이트)")
             
         except Exception as e:
-            logger.error(f"가게 정보 삽입 실패: {e}")
+            logger.error(f"가게 정보 UPSERT 실패: {e}")
             raise
         finally:
             cursor.close()

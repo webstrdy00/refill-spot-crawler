@@ -4,7 +4,8 @@ import logging
 import os
 import re
 import json
-from typing import List, Dict, Optional
+import urllib.parse
+from typing import List, Dict, Optional, Any
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -314,10 +315,21 @@ class DiningCodeCrawler:
                     # 가게 이름 추출
                     title_elem = block.find('h2')
                     if title_elem:
-                        # 번호 제거 (예: "1. 육미제당" -> "육미제당")
+                        # 번호 제거 (예: "1. 육미제당" -> "육미제당", "14.강남 돼지상회" -> "강남 돼지상회")
                         name_text = title_elem.get_text(strip=True)
-                        if '. ' in name_text:
-                            name_text = name_text.split('. ', 1)[1]
+                        
+                        # 다양한 번호 패턴 제거
+                        # 패턴 1: "1. 가게명", "14. 가게명"
+                        if re.match(r'^\d+\.\s*', name_text):
+                            name_text = re.sub(r'^\d+\.\s*', '', name_text)
+                        
+                        # 패턴 2: "1.가게명", "14.가게명" (공백 없음)
+                        elif re.match(r'^\d+\.', name_text):
+                            name_text = re.sub(r'^\d+\.', '', name_text)
+                        
+                        # 패턴 3: "1 가게명", "14 가게명" (점 없음)
+                        elif re.match(r'^\d+\s+', name_text):
+                            name_text = re.sub(r'^\d+\s+', '', name_text)
                         
                         # 지점명 분리
                         place_elem = title_elem.find('span', class_='Info__Title__Place')
@@ -326,7 +338,7 @@ class DiningCodeCrawler:
                             # 지점명 제거하여 순수 가게명 추출
                             store_info['name'] = name_text.replace(store_info['branch'], '').strip()
                         else:
-                            store_info['name'] = name_text
+                            store_info['name'] = name_text.strip()
                     
                     # data 속성에서 위치정보 추출 시도
                     data_lat = block.get('data-lat') or block.get('data-latitude')
@@ -494,7 +506,7 @@ class DiningCodeCrawler:
             price_info = self._extract_price_info(soup)
             detail_info.update(price_info)
             
-            # 3. 영업시간 정보 추출 (강화)
+            # 3. 영업시간 정보 추출 (날짜별을 요일별로 변환)
             hours_info = self._extract_hours_info(soup)
             detail_info.update(hours_info)
             
@@ -510,15 +522,25 @@ class DiningCodeCrawler:
             contact_info = self._extract_contact_info(soup)
             detail_info.update(contact_info)
             
-            # 7. 좌표 정보 추출 (중요!)
+            # 7. 좌표 및 주소 정보 추출 (중요!)
             coordinate_info = self._extract_coordinate_info(soup)
             detail_info.update(coordinate_info)
             
-            # 8. 무한리필 관련 정보 추출 (강화)
+            # 8. 주소 정보 추가 추출 (개선)
+            address_info = self._extract_address_info(soup)
+            # 주소가 없거나 coordinate_info의 주소가 더 상세한 경우 업데이트
+            if address_info.get('address') and (not detail_info.get('address') or len(address_info['address']) > len(detail_info.get('address', ''))):
+                detail_info['address'] = address_info['address']
+            if address_info.get('basic_address'):
+                detail_info['basic_address'] = address_info['basic_address']
+            if address_info.get('road_address'):
+                detail_info['road_address'] = address_info['road_address']
+            
+            # 9. 무한리필 관련 정보 추출 (강화)
             refill_info = self._extract_refill_info(soup)
             detail_info.update(refill_info)
             
-            logger.info(f"상세 정보 수집 완료: {detail_info.get('name', 'Unknown')}")
+            logger.info(f"상세 정보 수집 완료: {detail_info.get('name', 'Unknown')} - 주소: {detail_info.get('address', 'N/A')}")
             
         except Exception as e:
             logger.error(f"상세 정보 수집 중 오류: {e}")
@@ -561,23 +583,22 @@ class DiningCodeCrawler:
                     menu_info['signature_menu'].append(text)
             
             # 무한리필 관련 메뉴 키워드 검색
-            refill_keywords = ['무한리필', '무제한', '리필', '셀프바']
-            all_text = soup.get_text()
+            refill_keywords = ['무한리필', '무제한', '셀프바']
+            food_keywords = ['고기', '삼겹살', '소고기', '돼지고기', '초밥', '회', '해산물', '야채']
             
-            for keyword in refill_keywords:
+            all_text = soup.get_text().lower()
+            found_keywords = []
+            
+            for keyword in refill_keywords + food_keywords:
                 if keyword in all_text:
-                    # 키워드 주변 텍스트 추출
-                    pattern = rf'.{{0,20}}{keyword}.{{0,20}}'
-                    matches = re.findall(pattern, all_text, re.IGNORECASE)
-                    for match in matches[:3]:  # 최대 3개까지
-                        clean_match = re.sub(r'\s+', ' ', match.strip())
-                        if clean_match not in menu_info['signature_menu']:
-                            menu_info['signature_menu'].append(clean_match)
+                    found_keywords.append(keyword)
             
-            logger.info(f"메뉴 정보 추출: {len(menu_info['menu_items'])}개 메뉴, {len(menu_info['signature_menu'])}개 대표메뉴")
+            review_info['keywords'] = found_keywords[:10]  # 최대 10개
+            
+            logger.info(f"리뷰 정보 추출: {len(found_keywords)}개 키워드")
             
         except Exception as e:
-            logger.error(f"메뉴 정보 추출 실패: {e}")
+            logger.error(f"리뷰 정보 추출 실패: {e}")
         
         return menu_info
 
@@ -634,54 +655,269 @@ class DiningCodeCrawler:
         
         return price_info
 
-    def _extract_hours_info(self, soup: BeautifulSoup) -> Dict:
-        """영업시간 정보 추출 (강화)"""
+    def _extract_hours_info(self, detail_soup: BeautifulSoup) -> Dict[str, Any]:
+        """영업시간, 브레이크타임, 라스트오더 정보 추출 (다이닝코드 구조 맞춤)"""
         hours_info = {
             'open_hours': '',
-            'open_hours_raw': '',
+            'holiday': '',
             'break_time': '',
-            'last_order': '',
-            'holiday': ''
+            'last_order': ''
         }
         
         try:
-            # 영업시간 관련 요소 찾기
-            time_elements = soup.find_all(['div', 'span', 'td'], class_=re.compile(r'time|hour|open|close'))
+            # 1단계: 영업시간이 포함된 리스트 아이템 찾기 (다이닝코드 구조)
+            hours_section = None
+            list_items = detail_soup.find_all('li')
             
-            time_texts = []
-            for elem in time_elements:
-                text = elem.get_text(strip=True)
-                if text and any(keyword in text for keyword in ['시', ':', '영업', '휴무', '브레이크']):
-                    time_texts.append(text)
+            for li in list_items:
+                li_text = li.get_text()
+                if any(keyword in li_text for keyword in ['영업시간', '라스트 오더', '라스트오더', '휴무']):
+                    hours_section = li
+                    logger.info(f"영업시간 섹션 발견: {li_text[:150]}...")
+                    break
             
-            # 영업시간 패턴 매칭
-            for text in time_texts:
-                # 영업시간 패턴
-                if re.search(r'\d{1,2}:\d{2}.*\d{1,2}:\d{2}', text):
-                    if not hours_info['open_hours']:
-                        hours_info['open_hours'] = text
-                    hours_info['open_hours_raw'] += text + ' | '
-                
-                # 브레이크타임 패턴
-                if '브레이크' in text or 'break' in text.lower():
-                    hours_info['break_time'] = text
-                
-                # 라스트오더 패턴
-                if '라스트' in text or 'last' in text.lower() or '주문마감' in text:
-                    hours_info['last_order'] = text
-                
+            if not hours_section:
+                logger.warning("영업시간 섹션을 찾을 수 없음")
+                return hours_info
+            
+            # 2단계: Selenium으로 토글 버튼 클릭하여 상세 정보 수집
+            expanded_hours_text = ""
+            if self.driver:
+                try:
+                    # 영업시간 토글 버튼 찾기
+                    toggle_buttons = self.driver.find_elements(By.CSS_SELECTOR, 'button')
+                    
+                    for button in toggle_buttons:
+                        try:
+                            # 버튼 근처에 영업시간 관련 텍스트가 있는지 확인
+                            parent = button.find_element(By.XPATH, '..')
+                            parent_text = parent.text
+                            
+                            if any(keyword in parent_text for keyword in ['영업시간', '라스트오더', '라스트 오더']):
+                                # 토글 아이콘이 있는 버튼인지 확인
+                                imgs = button.find_elements(By.TAG_NAME, 'img')
+                                for img in imgs:
+                                    alt_text = img.get_attribute('alt') or ''
+                                    if '토글' in alt_text or 'toggle' in alt_text.lower():
+                                        logger.info(f"영업시간 토글 버튼 클릭 시도")
+                                        self.driver.execute_script("arguments[0].click();", button)
+                                        time.sleep(2)  # 토글 애니메이션 대기
+                                        
+                                        # 업데이트된 페이지 소스로 다시 파싱
+                                        updated_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                                        
+                                        # 확장된 영업시간 정보 찾기 (개선된 방법)
+                                        # 1차: 원래 영업시간 섹션에서 확장된 내용 찾기
+                                        updated_list_items = updated_soup.find_all('li')
+                                        
+                                        for updated_li in updated_list_items:
+                                            updated_text = updated_li.get_text()
+                                            # 날짜별 영업시간 패턴이 있는지 확인
+                                            if re.search(r'\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)', updated_text):
+                                                # 블로그 리뷰나 기타 내용이 아닌 실제 영업시간 정보인지 확인
+                                                if not any(word in updated_text for word in ['블로그', '후기', '리뷰', '방문', '추천', '맛집', '오픈런', '웨이팅', '테이블링']):
+                                                    # 영업시간 관련 키워드가 포함되어 있는지 확인
+                                                    if any(keyword in updated_text for keyword in ['영업시간', '라스트오더', '휴무일', '휴무']):
+                                                        expanded_hours_text = updated_text
+                                                        logger.info(f"확장된 영업시간 정보 수집: {expanded_hours_text[:200]}...")
+                                                        break
+                                        
+                                        # 2차: 직접 영업시간 패턴 검색
+                                        if not expanded_hours_text:
+                                            # 페이지 전체에서 날짜별 영업시간 패턴 추출
+                                            page_text = updated_soup.get_text()
+                                            
+                                            # 날짜별 영업시간/휴무 패턴 찾기
+                                            date_patterns = [
+                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*영업시간:\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}[^가-힣]*?라스트오더:\s*\d{1,2}:\d{2})',
+                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*휴무일?)',
+                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*영업시간:\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})'
+                                            ]
+                                            
+                                            found_dates = []
+                                            for pattern in date_patterns:
+                                                matches = re.findall(pattern, page_text)
+                                                found_dates.extend(matches)
+                                            
+                                            if found_dates:
+                                                expanded_hours_text = ' '.join(found_dates)
+                                                logger.info(f"패턴 매칭으로 영업시간 정보 수집: {expanded_hours_text[:200]}...")
+                                        
+                                        break
+                                break
+                        except Exception as e:
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"토글 버튼 클릭 실패: {e}")
+            
+            # 3단계: 텍스트 파싱
+            hours_text = expanded_hours_text if expanded_hours_text else hours_section.get_text(strip=True)
+            logger.info(f"파싱할 영업시간 텍스트: {hours_text[:300]}...")
+            
+            # 날짜별 영업시간을 요일별로 변환
+            day_hours = {}
+            holiday_days = []
+            
+            # 라스트오더 정보 추출 (전체적으로 적용되는 것)
+            last_order_patterns = [
+                r'라스트\s*오더\s*[:：]?\s*(\d{1,2}:\d{2})',
+                r'라스트오더\s*[:：]?\s*(\d{1,2}:\d{2})',
+                r'L\.?O\.?\s*[:：]?\s*(\d{1,2}:\d{2})',
+                r'주문\s*마감\s*[:：]?\s*(\d{1,2}:\d{2})'
+            ]
+            
+            for pattern in last_order_patterns:
+                matches = re.findall(pattern, hours_text)
+                if matches:
+                    hours_info['last_order'] = matches[0]
+                    logger.info(f"라스트오더 추출: {hours_info['last_order']}")
+                    break
+            
+            # 브레이크타임 정보 추출
+            break_patterns = [
+                r'브레이크\s*타임?\s*[:：]?\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
+                r'브레이크\s*[:：]?\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
+                r'휴게시간\s*[:：]?\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
+            ]
+            
+            for pattern in break_patterns:
+                matches = re.findall(pattern, hours_text)
+                if matches:
+                    start_time, end_time = matches[0]
+                    hours_info['break_time'] = f"{start_time}-{end_time}"
+                    logger.info(f"브레이크타임 추출: {hours_info['break_time']}")
+                    break
+            
+            # 날짜별 영업시간 패턴 매칭
+            # 예: "6월 29일(일) 휴무일", "6월 30일(월) 영업시간: 11:30 - 21:00 라스트오더: 20:20"
+            date_patterns = [
                 # 휴무일 패턴
-                if '휴무' in text or '정기휴일' in text:
-                    hours_info['holiday'] = text
+                r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*휴무',
+                # 영업시간 패턴 (라스트오더 포함)
+                r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s*라스트오더:\s*(\d{1,2}:\d{2}))?',
+                # 간단한 영업시간 패턴
+                r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
+            ]
             
-            # 정리
-            hours_info['open_hours_raw'] = hours_info['open_hours_raw'].rstrip(' | ')
+            for pattern in date_patterns:
+                matches = re.findall(pattern, hours_text)
+                for match in matches:
+                    if len(match) == 2:  # 휴무일
+                        date, day = match
+                        holiday_days.append(day)
+                        logger.info(f"휴무일 발견: {day}요일")
+                    elif len(match) >= 4:  # 영업시간
+                        if len(match) == 5:  # 라스트오더 포함
+                            date, day, start_time, end_time, last_order = match
+                            if last_order:
+                                day_hours[day] = f"{start_time}-{end_time} (L.O: {last_order})"
+                            else:
+                                day_hours[day] = f"{start_time}-{end_time}"
+                        else:  # 기본 영업시간
+                            date, day, start_time, end_time = match[:4]
+                            day_hours[day] = f"{start_time}-{end_time}"
+                        logger.info(f"영업시간 발견: {day}요일 {day_hours[day]}")
             
-            logger.info(f"영업시간 정보 추출 완료")
+            # 기본 영업시간 패턴도 확인 (토글되지 않은 경우)
+            basic_patterns = [
+                r'영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
+                r'오늘.*?영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
+            ]
+            
+            for pattern in basic_patterns:
+                matches = re.findall(pattern, hours_text)
+                if matches and not day_hours:  # 요일별 정보가 없을 때만
+                    start_time, end_time = matches[0]
+                    # 오늘 요일 추정 (실제로는 현재 날짜 기준)
+                    import datetime
+                    today = datetime.datetime.now()
+                    weekdays = ['월', '화', '수', '목', '금', '토', '일']
+                    today_korean = weekdays[today.weekday()]
+                    
+                    basic_hours = f"{start_time}-{end_time}"
+                    if hours_info['last_order']:
+                        basic_hours += f" (L.O: {hours_info['last_order']})"
+                    
+                    day_hours[today_korean] = basic_hours
+                    logger.info(f"기본 영업시간 적용: {today_korean}요일 {basic_hours}")
+                    break
+            
+            # 패턴 분석 및 누락된 요일 보완
+            all_days = ['월', '화', '수', '목', '금', '토', '일']
+            collected_days = set(day_hours.keys())
+            missing_days = [d for d in all_days if d not in collected_days and d not in holiday_days]
+            
+            logger.info(f"수집된 요일: {list(collected_days)}, 휴무일: {holiday_days}, 누락: {missing_days}")
+            
+            # 패턴 분석하여 누락된 요일 보완
+            if len(day_hours) > 0 and missing_days:
+                # 주중/주말 패턴 분석
+                weekday_hours = []
+                weekend_hours = []
+                
+                for day in ['월', '화', '수', '목', '금']:
+                    if day in day_hours:
+                        weekday_hours.append(day_hours[day])
+                
+                for day in ['토', '일']:
+                    if day in day_hours:
+                        weekend_hours.append(day_hours[day])
+                
+                # 주중 패턴 적용
+                if weekday_hours and len(set(weekday_hours)) == 1:  # 모든 주중이 같은 시간
+                    common_weekday = weekday_hours[0]
+                    for day in ['월', '화', '수', '목', '금']:
+                        if day in missing_days:
+                            day_hours[day] = common_weekday
+                            logger.info(f"{day}요일에 주중 패턴 적용: {common_weekday}")
+                
+                # 주말 패턴 적용
+                if weekend_hours and len(set(weekend_hours)) == 1:  # 모든 주말이 같은 시간
+                    common_weekend = weekend_hours[0]
+                    for day in ['토', '일']:
+                        if day in missing_days and day not in holiday_days:
+                            day_hours[day] = common_weekend
+                            logger.info(f"{day}요일에 주말 패턴 적용: {common_weekend}")
+            
+            # 최종 영업시간 문자열 생성
+            if day_hours:
+                hours_parts = []
+                days_order = ['월', '화', '수', '목', '금', '토', '일']
+                
+                for day in days_order:
+                    if day in day_hours:
+                        hours_parts.append(f"{day}: {day_hours[day]}")
+                    elif day in holiday_days:
+                        hours_parts.append(f"{day}: 휴무")
+                
+                hours_info['open_hours'] = ', '.join(hours_parts)
+            
+            # 휴무일 설정
+            if holiday_days:
+                unique_holidays = list(set(holiday_days))
+                if len(unique_holidays) == 1:
+                    hours_info['holiday'] = f"매주 {unique_holidays[0]} 휴무"
+                else:
+                    hours_info['holiday'] = ', '.join(unique_holidays) + ' 휴무'
+            elif len(day_hours) == 7:
+                hours_info['holiday'] = '연중무휴'
+            
+            # 24시간 영업 체크
+            if any(keyword in hours_text for keyword in ['24시간', '24시', '24HOUR', '24H']):
+                hours_info['open_hours'] = '24시간 영업'
+                hours_info['holiday'] = '연중무휴'
+            
+            logger.info(f"최종 영업시간: {hours_info['open_hours']}")
+            logger.info(f"휴무일: {hours_info['holiday']}")
+            logger.info(f"브레이크타임: {hours_info['break_time']}")
+            logger.info(f"라스트오더: {hours_info['last_order']}")
             
         except Exception as e:
-            logger.error(f"영업시간 정보 추출 실패: {e}")
-        
+            logger.error(f"영업시간 추출 중 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
         return hours_info
 
     def _extract_image_info(self, soup: BeautifulSoup) -> Dict:
@@ -788,7 +1024,9 @@ class DiningCodeCrawler:
             for pattern in phone_patterns:
                 matches = re.findall(pattern, all_text)
                 if matches:
-                    contact_info['phone_number'] = matches[0]
+                    raw_phone = matches[0]
+                    # 전화번호 정규화 (0507 → 07 문제 해결)
+                    contact_info['phone_number'] = self._normalize_phone_number(raw_phone)
                     break
             
             # 웹사이트 링크 찾기
@@ -805,6 +1043,48 @@ class DiningCodeCrawler:
             logger.error(f"연락처 정보 추출 실패: {e}")
         
         return contact_info
+    
+    def _normalize_phone_number(self, phone: str) -> str:
+        """전화번호 정규화 (0507 → 07 문제 해결)"""
+        if not phone:
+            return phone
+        
+        # 하이픈 제거
+        clean_phone = phone.replace('-', '')
+        
+        # 0507, 0508 등의 인터넷 전화번호 정규화
+        # 0507-1234-5678 → 0507-1234-5678 (그대로 유지)
+        # 잘못 파싱된 07-1234-5678 → 0507-1234-5678 (복원)
+        
+        # 패턴 1: 07-XXXX-XXXX 형태 (0507에서 05가 누락된 경우)
+        if re.match(r'^07\d{8}$', clean_phone):
+            # 07XXXXXXXX → 0507XXXXXXXX
+            clean_phone = '0507' + clean_phone[2:]
+        elif re.match(r'^08\d{8}$', clean_phone):
+            # 08XXXXXXXX → 0508XXXXXXXX  
+            clean_phone = '0508' + clean_phone[2:]
+        
+        # 하이픈 추가하여 표준 형식으로 변환
+        if len(clean_phone) == 11:
+            if clean_phone.startswith('010'):
+                # 010-XXXX-XXXX
+                return f"{clean_phone[:3]}-{clean_phone[3:7]}-{clean_phone[7:]}"
+            elif clean_phone.startswith(('0507', '0508', '070')):
+                # 0507-XXXX-XXXX, 0508-XXXX-XXXX, 070-XXXX-XXXX
+                return f"{clean_phone[:4]}-{clean_phone[4:8]}-{clean_phone[8:]}"
+        elif len(clean_phone) == 10:
+            if clean_phone.startswith('02'):
+                # 02-XXXX-XXXX
+                return f"{clean_phone[:2]}-{clean_phone[2:6]}-{clean_phone[6:]}"
+            else:
+                # 기타 지역번호 0XX-XXX-XXXX
+                return f"{clean_phone[:3]}-{clean_phone[3:6]}-{clean_phone[6:]}"
+        elif len(clean_phone) == 9 and clean_phone.startswith('02'):
+            # 02-XXX-XXXX
+            return f"{clean_phone[:2]}-{clean_phone[2:5]}-{clean_phone[5:]}"
+        
+        # 기본적으로 원래 번호 반환
+        return phone
 
     def _extract_refill_info(self, soup: BeautifulSoup) -> Dict:
         """무한리필 관련 정보 추출 (강화)"""
@@ -1015,6 +1295,127 @@ class DiningCodeCrawler:
             logger.error(f"좌표 정보 추출 실패: {e}")
         
         return coordinate_info
+    
+    def _extract_address_info(self, soup: BeautifulSoup) -> Dict:
+        """주소 정보 추출 (다이닝코드 구조에 맞게 개선)"""
+        address_info = {
+            'address': '',
+            'basic_address': '',
+            'road_address': ''
+        }
+        
+        try:
+            # 다이닝코드의 주소는 주로 링크 형태로 되어 있음
+            # 예: <a href="/list.dc?query=서울특별시">서울특별시</a> <a href="/list.dc?query=서울특별시 강남구">강남구</a>
+            
+            # 1. 주소 링크들을 찾기
+            address_parts = []
+            
+            # list.dc?query= 패턴을 가진 링크들 찾기
+            address_links = soup.find_all('a', href=re.compile(r'/list\.dc\?query='))
+            
+            # 주소 부분만 추출
+            for link in address_links:
+                text = link.get_text(strip=True)
+                
+                # 주소 관련 키워드가 있는 경우만
+                if any(keyword in text for keyword in ['서울', '특별시', '광역시', '시', '구', '동', '로', '길', '번지']):
+                    # 맛집, 검색하기 등의 키워드가 포함된 경우 제외
+                    if not any(exclude in text for exclude in ['맛집', '검색', '음식', '랭킹', '추천']):
+                        address_parts.append(text)
+            
+            # 2. 중복 제거하면서 순서대로 주소 조합
+            if address_parts:
+                # 중복 제거 (순서 유지)
+                seen = set()
+                unique_parts = []
+                for part in address_parts:
+                    if part not in seen and len(part) > 1:
+                        seen.add(part)
+                        unique_parts.append(part)
+                
+                # 주소 부분들을 합쳐서 완전한 주소 만들기
+                # 서울특별시, 강남구, 테헤란로 -> 서울특별시 강남구 테헤란로
+                full_address = ""
+                
+                # 시/도 찾기
+                for part in unique_parts:
+                    if any(keyword in part for keyword in ['서울특별시', '서울시', '서울', '경기도', '인천광역시']):
+                        full_address = part
+                        break
+                
+                # 구 찾기
+                for part in unique_parts:
+                    if '구' in part and part not in full_address:
+                        if full_address:
+                            full_address += " " + part
+                        else:
+                            full_address = part
+                
+                # 동/로/길 찾기
+                for part in unique_parts:
+                    if any(keyword in part for keyword in ['동', '로', '길']) and part not in full_address:
+                        if full_address:
+                            full_address += " " + part
+                        else:
+                            full_address = part
+                
+                # 번지/번호 찾기
+                for part in unique_parts:
+                    if re.search(r'\d+', part) and part not in full_address:
+                        if full_address:
+                            full_address += " " + part
+                
+                address_info['address'] = full_address.strip()
+            
+            # 3. 주소가 없거나 불완전한 경우 백업 방법 시도
+            if not address_info['address'] or len(address_info['address']) < 10:
+                # 주소 관련 요소 직접 찾기
+                address_selectors = [
+                    '.BasicInfo__Address',
+                    '.Info__Address', 
+                    '.address',
+                    '.location',
+                    '[class*="addr"]',
+                    '[class*="address"]'
+                ]
+                
+                for selector in address_selectors:
+                    elem = soup.select_one(selector)
+                    if elem:
+                        text = elem.get_text(strip=True)
+                        # HTML 태그 제거
+                        text = re.sub(r'<[^>]+>', '', text)
+                        # 주소 패턴 확인
+                        if text and any(keyword in text for keyword in ['서울', '구', '동', '로', '길']):
+                            # 불필요한 텍스트 제거
+                            text = re.sub(r'(맛집|검색하기|음식|랭킹|추천).*', '', text)
+                            text = text.strip()
+                            if len(text) > len(address_info.get('address', '')):
+                                address_info['address'] = text
+                                break
+            
+            # 4. 주소 최종 정리
+            if address_info['address']:
+                # 연속된 공백 제거
+                address_info['address'] = ' '.join(address_info['address'].split())
+                
+                # HTML 엔티티 제거
+                address_info['address'] = address_info['address'].replace('&nbsp;', ' ')
+                address_info['address'] = address_info['address'].replace('&amp;', '&')
+                
+                # 도로명 주소인지 확인
+                if any(keyword in address_info['address'] for keyword in ['로', '길']):
+                    address_info['road_address'] = address_info['address']
+                else:
+                    address_info['basic_address'] = address_info['address']
+            
+            logger.info(f"최종 주소: {address_info['address']}")
+            
+        except Exception as e:
+            logger.error(f"주소 정보 추출 실패: {e}")
+        
+        return address_info
     
     def close(self):
         """WebDriver 종료"""
