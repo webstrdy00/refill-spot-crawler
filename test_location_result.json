@@ -1,0 +1,13 @@
+{
+  "test_date": "2025-06-27 00:04:43.703920",
+  "keyword": "강남 무한리필",
+  "total_stores": 20,
+  "stores_with_location": 0,
+  "location_rate": "0.0%",
+  "test_store": {
+    "name": "1.강남 돼지상회 무한리필",
+    "lat": 37.500792,
+    "lng": 127.0275564,
+    "address": null
+  }
+}

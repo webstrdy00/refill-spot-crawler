@@ -438,14 +438,13 @@ class SeoulDistrictManager:
             f"{district_name} 무한리필 맛집"
         ]
         
-        # 핫스팟별 키워드 추가
+        # 핫스팟별 키워드 추가 (무한리필만)
         hotspot_keywords = []
         for hotspot in hotspots:
             hotspot_keywords.extend([
                 f"{hotspot} 무한리필",
                 f"{hotspot} 고기무한리필",
-                f"{hotspot}역 무한리필",
-                f"{hotspot} 뷔페"
+                f"{hotspot}역 무한리필"
             ])
         
         # 서울 특화 키워드

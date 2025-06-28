@@ -210,14 +210,14 @@ class DiningCodeCrawler:
                 # 더보기 버튼 클릭으로 추가 결과 로드
                 self._load_more_results()
                 
-                # localStorage에서 listData 추출
+                # 방법 1: localStorage에서 listData 추출
                 list_data = self.driver.execute_script("return localStorage.getItem('listData');")
                 if list_data:
                     import json
                     data = json.loads(list_data)
                     poi_list = data.get('poi_section', {}).get('list', [])
                     
-                    logger.info(f"JavaScript에서 {len(poi_list)}개 가게 데이터 추출")
+                    logger.info(f"localStorage에서 {len(poi_list)}개 가게 데이터 추출")
                     
                     for poi in poi_list:
                         store_info = {
@@ -247,8 +247,37 @@ class DiningCodeCrawler:
                             logger.info(f"가게 추가: {store_info['name']} {store_info['branch']} (ID: {store_info['diningcode_place_id']})")
                     
                     if stores:
-                        logger.info(f"JavaScript에서 총 {len(stores)}개 가게 정보 수집 완료")
+                        logger.info(f"localStorage에서 총 {len(stores)}개 가게 정보 수집 완료")
                         return stores
+                else:
+                    logger.info("localStorage에 listData가 없음. 다른 방법 시도...")
+                
+                # 방법 2: 전역 JavaScript 변수에서 데이터 추출
+                js_check_script = """
+                    // window 객체에서 데이터 찾기
+                    var data = null;
+                    if (window.__INITIAL_STATE__) {
+                        data = window.__INITIAL_STATE__;
+                    } else if (window.__APP_DATA__) {
+                        data = window.__APP_DATA__;
+                    } else if (window.appData) {
+                        data = window.appData;
+                    }
+                    return data;
+                """
+                
+                js_data = self.driver.execute_script(js_check_script)
+                if js_data:
+                    logger.info("전역 JavaScript 변수에서 데이터 발견")
+                    # 데이터 구조 분석 후 추출
+                
+                # 방법 3: 페이지 내 script 태그에서 JSON 데이터 추출
+                scripts = self.driver.find_all('script')
+                for script in scripts:
+                    script_text = script.get_attribute('innerHTML')
+                    if script_text and ('poi_list' in script_text or 'store_list' in script_text):
+                        logger.info("script 태그에서 가게 데이터 발견")
+                        # JSON 데이터 파싱 시도
                         
             except Exception as e:
                 logger.warning(f"JavaScript 데이터 추출 실패: {e}")
@@ -270,7 +299,9 @@ class DiningCodeCrawler:
                         'branch': '',
                         'basic_address': '',
                         'keyword': keyword,
-                        'rect_area': rect
+                        'rect_area': rect,
+                        'position_lat': None,
+                        'position_lng': None
                     }
                     
                     # URL에서 rid 추출
@@ -296,6 +327,18 @@ class DiningCodeCrawler:
                             store_info['name'] = name_text.replace(store_info['branch'], '').strip()
                         else:
                             store_info['name'] = name_text
+                    
+                    # data 속성에서 위치정보 추출 시도
+                    data_lat = block.get('data-lat') or block.get('data-latitude')
+                    data_lng = block.get('data-lng') or block.get('data-longitude')
+                    
+                    if data_lat and data_lng:
+                        try:
+                            store_info['position_lat'] = float(data_lat)
+                            store_info['position_lng'] = float(data_lng)
+                            logger.info(f"HTML data 속성에서 좌표 추출: {store_info['name']} ({data_lat}, {data_lng})")
+                        except:
+                            pass
                     
                     # 평점 정보 추출
                     score_elem = block.find('p', class_='Score')
@@ -426,11 +469,16 @@ class DiningCodeCrawler:
             self.driver.get(detail_url)
             self.random_delay()
             
-            # 페이지 로딩 대기
+            # 페이지 로딩 대기 (더 유연한 조건)
             try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "restaurant-detail"))
+                # 여러 가능한 요소 중 하나라도 로드되면 계속 진행
+                WebDriverWait(self.driver, 15).until(
+                    lambda driver: driver.find_elements(By.TAG_NAME, "body") and 
+                    len(driver.page_source) > 1000 and
+                    "diningcode" in driver.current_url.lower()
                 )
+                # 추가 로딩 시간
+                time.sleep(2)
             except TimeoutException:
                 logger.warning("상세 페이지 로딩 타임아웃")
                 time.sleep(3)
@@ -462,7 +510,11 @@ class DiningCodeCrawler:
             contact_info = self._extract_contact_info(soup)
             detail_info.update(contact_info)
             
-            # 7. 무한리필 관련 정보 추출 (강화)
+            # 7. 좌표 정보 추출 (중요!)
+            coordinate_info = self._extract_coordinate_info(soup)
+            detail_info.update(coordinate_info)
+            
+            # 8. 무한리필 관련 정보 추출 (강화)
             refill_info = self._extract_refill_info(soup)
             detail_info.update(refill_info)
             
@@ -509,7 +561,7 @@ class DiningCodeCrawler:
                     menu_info['signature_menu'].append(text)
             
             # 무한리필 관련 메뉴 키워드 검색
-            refill_keywords = ['무한리필', '무제한', '뷔페', '리필', '셀프바']
+            refill_keywords = ['무한리필', '무제한', '리필', '셀프바']
             all_text = soup.get_text()
             
             for keyword in refill_keywords:
@@ -697,7 +749,7 @@ class DiningCodeCrawler:
                 review_info['description'] = ' '.join(descriptions[:3])  # 최대 3개 합치기
             
             # 키워드 추출 (무한리필 관련)
-            refill_keywords = ['무한리필', '뷔페', '무제한', '셀프바', '리필가능', '무료리필']
+            refill_keywords = ['무한리필', '무제한', '셀프바', '리필가능', '무료리필']
             food_keywords = ['고기', '삼겹살', '소고기', '돼지고기', '초밥', '회', '해산물', '야채']
             
             all_text = soup.get_text().lower()
@@ -788,7 +840,7 @@ class DiningCodeCrawler:
             refill_info['refill_items'] = list(set(cleaned_items))[:10]
             
             # 무한리필 확인
-            refill_keywords = ['무한리필', '무제한', '뷔페', '셀프바']
+            refill_keywords = ['무한리필', '무제한', '셀프바']
             for keyword in refill_keywords:
                 if keyword in all_text:
                     refill_info['is_confirmed_refill'] = True
@@ -810,6 +862,159 @@ class DiningCodeCrawler:
             logger.error(f"무한리필 정보 추출 실패: {e}")
         
         return refill_info
+    
+    def _extract_coordinate_info(self, soup: BeautifulSoup) -> Dict:
+        """좌표 정보 추출 (다이닝코드 상세 페이지에서) - 개선된 버전"""
+        coordinate_info = {
+            'position_lat': None,
+            'position_lng': None,
+            'address': None
+        }
+        
+        try:
+            # 1. Selenium을 통한 JavaScript 변수 추출 (가장 확실한 방법)
+            if self.driver:
+                try:
+                    # JavaScript 실행으로 좌표 정보 추출
+                    lat_script = r"""
+                    var lat = null;
+                    try {
+                        // 전역 변수에서 찾기
+                        if (typeof lat !== 'undefined' && lat) lat = lat;
+                        else if (typeof latitude !== 'undefined' && latitude) lat = latitude;
+                        else if (typeof poi_lat !== 'undefined' && poi_lat) lat = poi_lat;
+                        else if (typeof mapLat !== 'undefined' && mapLat) lat = mapLat;
+                        else if (typeof window.lat !== 'undefined' && window.lat) lat = window.lat;
+                        else if (typeof window.latitude !== 'undefined' && window.latitude) lat = window.latitude;
+                        
+                        // 객체 안에서 찾기
+                        if (!lat && typeof window.poi !== 'undefined' && window.poi && window.poi.lat) lat = window.poi.lat;
+                        if (!lat && typeof window.store !== 'undefined' && window.store && window.store.lat) lat = window.store.lat;
+                        if (!lat && typeof window.restaurant !== 'undefined' && window.restaurant && window.restaurant.lat) lat = window.restaurant.lat;
+                        
+                        // 페이지 소스에서 정규식으로 찾기
+                        if (!lat) {
+                            var pageSource = document.documentElement.outerHTML;
+                            var latMatch = pageSource.match(/(?:latitude|lat)["']?\s*[:=]\s*([0-9]+\.?[0-9]*)/i);
+                            if (latMatch) lat = parseFloat(latMatch[1]);
+                        }
+                    } catch(e) {
+                        console.log('위도 추출 오류:', e);
+                    }
+                    return lat;
+                    """
+                    
+                    lng_script = r"""
+                    var lng = null;
+                    try {
+                        // 전역 변수에서 찾기
+                        if (typeof lng !== 'undefined' && lng) lng = lng;
+                        else if (typeof longitude !== 'undefined' && longitude) lng = longitude;
+                        else if (typeof poi_lng !== 'undefined' && poi_lng) lng = poi_lng;
+                        else if (typeof mapLng !== 'undefined' && mapLng) lng = mapLng;
+                        else if (typeof window.lng !== 'undefined' && window.lng) lng = window.lng;
+                        else if (typeof window.longitude !== 'undefined' && window.longitude) lng = window.longitude;
+                        
+                        // 객체 안에서 찾기
+                        if (!lng && typeof window.poi !== 'undefined' && window.poi && window.poi.lng) lng = window.poi.lng;
+                        if (!lng && typeof window.store !== 'undefined' && window.store && window.store.lng) lng = window.store.lng;
+                        if (!lng && typeof window.restaurant !== 'undefined' && window.restaurant && window.restaurant.lng) lng = window.restaurant.lng;
+                        
+                        // 페이지 소스에서 정규식으로 찾기
+                        if (!lng) {
+                            var pageSource = document.documentElement.outerHTML;
+                            var lngMatch = pageSource.match(/(?:longitude|lng)["']?\s*[:=]\s*([0-9]+\.?[0-9]*)/i);
+                            if (lngMatch) lng = parseFloat(lngMatch[1]);
+                        }
+                    } catch(e) {
+                        console.log('경도 추출 오류:', e);
+                    }
+                    return lng;
+                    """
+                    
+                    lat = self.driver.execute_script(lat_script)
+                    lng = self.driver.execute_script(lng_script)
+                    
+                    if lat and lng:
+                        coordinate_info['position_lat'] = float(lat)
+                        coordinate_info['position_lng'] = float(lng)
+                        logger.info(f"JavaScript에서 좌표 추출 성공: ({lat}, {lng})")
+                    else:
+                        logger.warning("JavaScript에서 좌표 추출 실패")
+                        
+                except Exception as js_error:
+                    logger.error(f"JavaScript 좌표 추출 오류: {js_error}")
+            
+            # 2. JavaScript 실행이 실패한 경우 HTML 파싱으로 대체
+            if not coordinate_info['position_lat']:
+                scripts = soup.find_all('script')
+                for script in scripts:
+                    if script.string:
+                        script_content = script.string
+                        
+                        # 다양한 패턴으로 좌표 검색
+                        patterns = [
+                            (r'latitude["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)', r'longitude["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)'),
+                            (r'lat["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)', r'lng["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)'),
+                            (r'poi_lat["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)', r'poi_lng["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)'),
+                            (r'mapLat["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)', r'mapLng["\']?\s*[:=]\s*([0-9]+\.?[0-9]*)')
+                        ]
+                        
+                        for lat_pattern, lng_pattern in patterns:
+                            lat_match = re.search(lat_pattern, script_content, re.IGNORECASE)
+                            lng_match = re.search(lng_pattern, script_content, re.IGNORECASE)
+                            
+                            if lat_match and lng_match:
+                                coordinate_info['position_lat'] = float(lat_match.group(1))
+                                coordinate_info['position_lng'] = float(lng_match.group(1))
+                                logger.info(f"HTML 파싱으로 좌표 추출: ({coordinate_info['position_lat']}, {coordinate_info['position_lng']})")
+                                break
+                        
+                        if coordinate_info['position_lat']:
+                            break
+            
+            # 3. 주소 정보 추출 (지오코딩용)
+            address_selectors = [
+                '.address',
+                '.location',
+                '[class*="addr"]',
+                '[class*="address"]',
+                '.info-address',
+                '.restaurant-address',
+                '.store-address',
+                '.poi-address'
+            ]
+            
+            for selector in address_selectors:
+                address_elem = soup.select_one(selector)
+                if address_elem:
+                    address_text = address_elem.get_text(strip=True)
+                    if address_text and len(address_text) > 5:
+                        coordinate_info['address'] = address_text
+                        logger.info(f"주소 정보 추출: {address_text}")
+                        break
+            
+            # 4. 좌표 유효성 검증 (한국 영역 내)
+            if coordinate_info['position_lat'] and coordinate_info['position_lng']:
+                lat = coordinate_info['position_lat']
+                lng = coordinate_info['position_lng']
+                
+                # 한국 영역 체크 (대략적인 범위)
+                if not (33.0 <= lat <= 38.5 and 124.0 <= lng <= 132.0):
+                    logger.warning(f"좌표가 한국 영역을 벗어남: ({lat}, {lng})")
+                    coordinate_info['position_lat'] = None
+                    coordinate_info['position_lng'] = None
+                else:
+                    logger.info(f"좌표 유효성 검증 통과: ({lat}, {lng})")
+            
+            # 5. 좌표가 없으면 주소로 지오코딩 필요 표시
+            if not coordinate_info['position_lat'] and coordinate_info['address']:
+                logger.info(f"주소 기반 지오코딩 필요: {coordinate_info['address']}")
+                
+        except Exception as e:
+            logger.error(f"좌표 정보 추출 실패: {e}")
+        
+        return coordinate_info
     
     def close(self):
         """WebDriver 종료"""

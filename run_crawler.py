@@ -16,29 +16,27 @@ sys.path.insert(0, str(project_root))
 def run_main_crawler():
     """메인 크롤러 실행"""
     try:
-        # 직접 subprocess로 main.py 실행
-        import subprocess
-        import sys
+        # 직접 import하여 실행 (실시간 로그 확인 가능)
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'src', 'utils'))
+        from main import run_enhanced_crawling
         
-        result = subprocess.run([
-            sys.executable, 
-            "src/utils/main.py", 
-            "enhanced"
-        ], capture_output=True, text=True)
+        print("📍 강남 지역 크롤링을 시작합니다...")
+        print("💡 전체 서울 크롤링을 원하시면 'python src/utils/main.py stage4'를 직접 실행하세요")
         
-        if result.returncode == 0:
+        # enhanced 모드로 실행 (강남 지역만, 빠른 테스트용)
+        result = run_enhanced_crawling()
+        
+        if result:
             print("✅ 크롤링 완료!")
-            if result.stdout:
-                print(result.stdout)
             return True
         else:
             print("❌ 크롤링 실패!")
-            if result.stderr:
-                print(result.stderr)
             return False
             
     except Exception as e:
         print(f"❌ 크롤러 실행 오류: {e}")
+        import traceback
+        print(traceback.format_exc())
         return False
 
 def run_automation():
