@@ -79,6 +79,8 @@ class DataMigration:
                 WHERE s.status = '운영중'
                 AND s.position_lat IS NOT NULL 
                 AND s.position_lng IS NOT NULL
+                AND s.position_lat != 0
+                AND s.position_lng != 0
                 GROUP BY s.id
                 ORDER BY s.created_at DESC
             """
@@ -141,24 +143,42 @@ class DataMigration:
         diningcode_rating = store.get('diningcode_rating')
         
         # 6. 카테고리 매핑
-        categories = self._map_categories(store.get('category_names', []))
+        category_names = store.get('category_names') or []
+        # None 값이나 [None] 배열 처리
+        if category_names and category_names[0] is None:
+            category_names = []
+        categories = self._map_categories(category_names)
+        
+        # 좌표 검증 및 변환
+        try:
+            position_lat = float(store['position_lat']) if store.get('position_lat') else None
+            position_lng = float(store['position_lng']) if store.get('position_lng') else None
+            
+            if position_lat is None or position_lng is None:
+                raise ValueError("좌표 정보가 없습니다")
+                
+            # position_x, position_y가 None인 경우 lat/lng 값을 사용
+            position_x = float(store['position_x']) if store.get('position_x') is not None else position_lng
+            position_y = float(store['position_y']) if store.get('position_y') is not None else position_lat
+            
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"좌표 변환 실패: {e}")
         
         return {
             'name': store['name'],
             'address': store.get('address', ''),
             'description': self._generate_description(store),
-            'positionLat': float(store['position_lat']),
-            'positionLng': float(store['position_lng']),
-            'positionX': float(store.get('position_x', store['position_lng'])),
-            'positionY': float(store.get('position_y', store['position_lat'])),
-            'naverRating': float(naver_rating) if naver_rating else None,
-            'kakaoRating': float(kakao_rating) if kakao_rating else None,
-            'openHours': open_hours,
+            'position_lat': position_lat,
+            'position_lng': position_lng,
+            'position_x': position_x,
+            'position_y': position_y,
+            'naver_rating': float(naver_rating) if naver_rating else None,
+            'kakao_rating': float(kakao_rating) if kakao_rating else None,
+            'open_hours': open_hours,
             'price': price,
-            'refillItems': refill_items,
-            'imageUrls': image_urls,
-            'categories': categories,
-            'distance': None  # 거리는 사용자 위치 기반으로 계산
+            'refill_items': refill_items,
+            'image_urls': image_urls,
+            'categories': categories
         }
     
     def _process_price(self, store: Dict) -> Optional[str]:
@@ -300,6 +320,10 @@ class DataMigration:
     
     def _map_categories(self, crawler_categories: List[str]) -> List[str]:
         """크롤러 카테고리를 프로젝트 카테고리로 매핑"""
+        # None 값 처리
+        if not crawler_categories:
+            return ['무한리필']  # 기본 카테고리
+        
         # 카테고리 매핑 테이블
         category_mapping = {
             '무한리필': '무한리필',
@@ -335,7 +359,7 @@ class DataMigration:
         mapped_categories = set()
         
         for cat in crawler_categories:
-            if cat:
+            if cat and cat is not None:  # None 체크 추가
                 # 정확한 매칭
                 if cat in category_mapping:
                     mapped_categories.add(category_mapping[cat])
@@ -347,7 +371,11 @@ class DataMigration:
                             break
         
         # 무한리필 관련 카테고리가 있으면 '무한리필' 추가
-        if any('무한' in cat or '리필' in cat for cat in crawler_categories):
+        if any('무한' in str(cat) or '리필' in str(cat) for cat in crawler_categories if cat):
+            mapped_categories.add('무한리필')
+        
+        # 카테고리가 없으면 기본 카테고리 추가
+        if not mapped_categories:
             mapped_categories.add('무한리필')
         
         return list(mapped_categories)
@@ -370,18 +398,20 @@ class DataMigration:
         cursor.execute("""
             INSERT INTO stores (
                 name, address, description, 
-                "positionLat", "positionLng", "positionX", "positionY",
-                "naverRating", "kakaoRating", "openHours", 
-                price, "refillItems", "imageUrls"
+                position_lat, position_lng, position_x, position_y,
+                naver_rating, kakao_rating, open_hours, 
+                price, refill_items, image_urls, geom
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             ) RETURNING id
         """, (
             data['name'], data['address'], data['description'],
-            data['positionLat'], data['positionLng'], 
-            data['positionX'], data['positionY'],
-            data['naverRating'], data['kakaoRating'], data['openHours'],
-            data['price'], data['refillItems'], data['imageUrls']
+            data['position_lat'], data['position_lng'], 
+            data['position_x'], data['position_y'],
+            data['naver_rating'], data['kakao_rating'], data['open_hours'],
+            data['price'], data['refill_items'], data['image_urls'],
+            data['position_lng'], data['position_lat']  # geom 필드를 위한 좌표
         ))
         
         store_id = cursor.fetchone()[0]

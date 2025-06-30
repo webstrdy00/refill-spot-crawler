@@ -465,8 +465,9 @@ class DiningCodeCrawler:
         return self.retry_on_failure(_get_detail, max_retries=3)
 
     def _extract_store_detail(self, store_info: Dict) -> Dict:
-        """실제 상세 정보 추출 로직"""
+        """실제 상세 정보 추출 로직 (강화된 에러 핸들링)"""
         detail_info = store_info.copy()
+        extraction_errors = []
         
         try:
             place_id = store_info.get('diningcode_place_id', '')
@@ -483,13 +484,11 @@ class DiningCodeCrawler:
             
             # 페이지 로딩 대기 (더 유연한 조건)
             try:
-                # 여러 가능한 요소 중 하나라도 로드되면 계속 진행
                 WebDriverWait(self.driver, 15).until(
                     lambda driver: driver.find_elements(By.TAG_NAME, "body") and 
                     len(driver.page_source) > 1000 and
                     "diningcode" in driver.current_url.lower()
                 )
-                # 추가 로딩 시간
                 time.sleep(2)
             except TimeoutException:
                 logger.warning("상세 페이지 로딩 타임아웃")
@@ -498,55 +497,152 @@ class DiningCodeCrawler:
             # BeautifulSoup으로 파싱
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             
-            # 1. 메뉴 정보 추출 (강화)
-            menu_info = self._extract_menu_info(soup)
-            detail_info.update(menu_info)
+            # 1. 메뉴 정보 추출 (에러 핸들링 강화)
+            try:
+                menu_info = self._extract_menu_info(soup)
+                detail_info.update(menu_info)
+                logger.debug("메뉴 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"메뉴 정보 추출 실패: {e}")
+                logger.warning(f"메뉴 정보 추출 실패: {e}")
             
-            # 2. 가격 정보 추출 (강화)
-            price_info = self._extract_price_info(soup)
-            detail_info.update(price_info)
+            # 2. 가격 정보 추출 (에러 핸들링 강화)
+            try:
+                price_info = self._extract_price_info(soup)
+                detail_info.update(price_info)
+                logger.debug("가격 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"가격 정보 추출 실패: {e}")
+                logger.warning(f"가격 정보 추출 실패: {e}")
             
-            # 3. 영업시간 정보 추출 (날짜별을 요일별로 변환)
-            hours_info = self._extract_hours_info(soup)
-            detail_info.update(hours_info)
+            # 3. 영업시간 정보 추출 (에러 핸들링 강화)
+            try:
+                hours_info = self._extract_hours_info(soup)
+                detail_info.update(hours_info)
+                logger.debug("영업시간 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"영업시간 정보 추출 실패: {e}")
+                logger.warning(f"영업시간 정보 추출 실패: {e}")
             
-            # 4. 이미지 URL 수집 (강화)
-            image_info = self._extract_image_info(soup)
-            detail_info.update(image_info)
+            # 4. 이미지 URL 수집 (에러 핸들링 강화)
+            try:
+                image_info = self._extract_image_info(soup)
+                detail_info.update(image_info)
+                logger.debug("이미지 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"이미지 정보 추출 실패: {e}")
+                logger.warning(f"이미지 정보 추출 실패: {e}")
             
-            # 5. 리뷰 및 설명 정보 추출 (강화)
-            review_info = self._extract_review_info(soup)
-            detail_info.update(review_info)
+            # 5. 리뷰 및 설명 정보 추출 (에러 핸들링 강화)
+            try:
+                review_info = self._extract_review_info(soup)
+                detail_info.update(review_info)
+                logger.debug("리뷰 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"리뷰 정보 추출 실패: {e}")
+                logger.warning(f"리뷰 정보 추출 실패: {e}")
             
-            # 6. 연락처 정보 추출 (강화)
-            contact_info = self._extract_contact_info(soup)
-            detail_info.update(contact_info)
+            # 6. 연락처 정보 추출 (에러 핸들링 강화)
+            try:
+                contact_info = self._extract_contact_info(soup)
+                detail_info.update(contact_info)
+                logger.debug("연락처 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"연락처 정보 추출 실패: {e}")
+                logger.warning(f"연락처 정보 추출 실패: {e}")
             
-            # 7. 좌표 및 주소 정보 추출 (중요!)
-            coordinate_info = self._extract_coordinate_info(soup)
-            detail_info.update(coordinate_info)
+            # 7. 좌표 및 주소 정보 추출 (에러 핸들링 강화)
+            try:
+                coordinate_info = self._extract_coordinate_info(soup)
+                detail_info.update(coordinate_info)
+                logger.debug("좌표 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"좌표 정보 추출 실패: {e}")
+                logger.warning(f"좌표 정보 추출 실패: {e}")
             
-            # 8. 주소 정보 추가 추출 (개선)
-            address_info = self._extract_address_info(soup)
-            # 주소가 없거나 coordinate_info의 주소가 더 상세한 경우 업데이트
-            if address_info.get('address') and (not detail_info.get('address') or len(address_info['address']) > len(detail_info.get('address', ''))):
-                detail_info['address'] = address_info['address']
-            if address_info.get('basic_address'):
-                detail_info['basic_address'] = address_info['basic_address']
-            if address_info.get('road_address'):
-                detail_info['road_address'] = address_info['road_address']
+            # 8. 주소 정보 추가 추출 (에러 핸들링 강화)
+            try:
+                address_info = self._extract_address_info(soup)
+                # 주소가 없거나 coordinate_info의 주소가 더 상세한 경우 업데이트
+                if address_info.get('address') and (not detail_info.get('address') or len(address_info['address']) > len(detail_info.get('address', ''))):
+                    detail_info['address'] = address_info['address']
+                if address_info.get('basic_address'):
+                    detail_info['basic_address'] = address_info['basic_address']
+                if address_info.get('road_address'):
+                    detail_info['road_address'] = address_info['road_address']
+                logger.debug("주소 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"주소 정보 추출 실패: {e}")
+                logger.warning(f"주소 정보 추출 실패: {e}")
             
-            # 9. 무한리필 관련 정보 추출 (강화)
-            refill_info = self._extract_refill_info(soup)
-            detail_info.update(refill_info)
+            # 9. 무한리필 관련 정보 추출 (에러 핸들링 강화)
+            try:
+                refill_info = self._extract_refill_info(soup)
+                detail_info.update(refill_info)
+                logger.debug("무한리필 정보 추출 성공")
+            except Exception as e:
+                extraction_errors.append(f"무한리필 정보 추출 실패: {e}")
+                logger.warning(f"무한리필 정보 추출 실패: {e}")
             
-            logger.info(f"상세 정보 수집 완료: {detail_info.get('name', 'Unknown')} - 주소: {detail_info.get('address', 'N/A')}")
+            # 추출 오류 요약
+            if extraction_errors:
+                detail_info['extraction_errors'] = extraction_errors
+                logger.warning(f"부분적 추출 오류 ({len(extraction_errors)}개): {'; '.join(extraction_errors[:3])}")
+            
+            # 데이터 품질 검증
+            quality_score = self._calculate_data_quality(detail_info)
+            detail_info['data_quality_score'] = quality_score
+            
+            logger.info(f"상세 정보 수집 완료: {detail_info.get('name', 'Unknown')} - 주소: {detail_info.get('address', 'N/A')[:50]}... (품질점수: {quality_score}%)")
             
         except Exception as e:
-            logger.error(f"상세 정보 수집 중 오류: {e}")
+            logger.error(f"상세 정보 수집 중 치명적 오류: {e}")
+            detail_info['fatal_error'] = str(e)
             # 기본 정보라도 반환
             
         return detail_info
+    
+    def _calculate_data_quality(self, store_info: Dict) -> int:
+        """데이터 품질 점수 계산 (0-100점)"""
+        try:
+            score = 0
+            max_score = 100
+            
+            # 필수 정보 (40점)
+            if store_info.get('name'):
+                score += 10
+            if store_info.get('address'):
+                score += 15
+            if store_info.get('position_lat') and store_info.get('position_lng'):
+                score += 15
+            
+            # 연락처 정보 (20점)
+            if store_info.get('phone_number'):
+                score += 20
+            
+            # 영업 정보 (20점)
+            if store_info.get('open_hours'):
+                score += 10
+            if store_info.get('last_order') or store_info.get('break_time'):
+                score += 5
+            if store_info.get('holiday'):
+                score += 5
+            
+            # 추가 정보 (20점)
+            if store_info.get('price_range') or store_info.get('average_price'):
+                score += 5
+            if store_info.get('image_urls') and len(store_info.get('image_urls', [])) > 0:
+                score += 5
+            if store_info.get('refill_items') and len(store_info.get('refill_items', [])) > 0:
+                score += 5
+            if store_info.get('keywords') and len(store_info.get('keywords', [])) > 0:
+                score += 5
+            
+            return min(score, max_score)
+            
+        except Exception as e:
+            logger.debug(f"품질 점수 계산 실패: {e}")
+            return 0
 
     def _extract_menu_info(self, soup: BeautifulSoup) -> Dict:
         """메뉴 정보 추출 (강화)"""
@@ -593,17 +689,17 @@ class DiningCodeCrawler:
                 if keyword in all_text:
                     found_keywords.append(keyword)
             
-            review_info['keywords'] = found_keywords[:10]  # 최대 10개
+            menu_info['keywords'] = found_keywords[:10]  # 최대 10개
             
-            logger.info(f"리뷰 정보 추출: {len(found_keywords)}개 키워드")
+            logger.info(f"메뉴 정보 추출: {len(menu_info['menu_items'])}개 메뉴, {len(found_keywords)}개 키워드")
             
         except Exception as e:
-            logger.error(f"리뷰 정보 추출 실패: {e}")
+            logger.error(f"메뉴 정보 추출 실패: {e}")
         
         return menu_info
 
     def _extract_price_info(self, soup: BeautifulSoup) -> Dict:
-        """가격 정보 추출 (강화)"""
+        """가격 정보 추출 (개선된 버전)"""
         price_info = {
             'price_range': '',
             'average_price': '',
@@ -611,31 +707,190 @@ class DiningCodeCrawler:
         }
         
         try:
-            # 가격 관련 요소 찾기
-            price_elements = soup.find_all(['span', 'div', 'td'], class_=re.compile(r'price|cost|amount|won'))
+            # 1. 다양한 가격 관련 요소 찾기 (개선된 셀렉터)
+            price_selectors = [
+                # 메뉴 가격 관련 클래스
+                '.menu-price', '.price', '.cost', '.amount',
+                '[class*="price"]', '[class*="Price"]', '[class*="cost"]',
+                '[class*="menu"]', '[class*="Menu"]',
+                
+                # 테이블 형태의 메뉴
+                'table td', 'tr td',
+                
+                # 리스트 형태의 메뉴
+                'li', 'ul li', 'ol li',
+                
+                # 일반적인 텍스트 요소
+                'span', 'div', 'p'
+            ]
+            
+            all_price_elements = []
+            for selector in price_selectors:
+                elements = soup.select(selector)
+                all_price_elements.extend(elements)
+            
+            # 2. 가격 패턴 매칭 (개선된 정규식)
+            price_patterns = [
+                # 기본 가격 패턴
+                r'(\d{1,3}(?:,\d{3})*)\s*원',  # 10,000원
+                r'(\d{1,3}(?:,\d{3})*)\s*₩',   # 10,000₩
+                r'₩\s*(\d{1,3}(?:,\d{3})*)',   # ₩10,000
+                
+                # 만원 단위
+                r'(\d+(?:\.\d+)?)\s*만\s*원',  # 1.5만원
+                r'(\d+)\s*만원',               # 1만원
+                
+                # 범위 가격
+                r'(\d{1,3}(?:,\d{3})*)\s*~\s*(\d{1,3}(?:,\d{3})*)\s*원',  # 10,000~20,000원
+                r'(\d{1,3}(?:,\d{3})*)\s*-\s*(\d{1,3}(?:,\d{3})*)\s*원',  # 10,000-20,000원
+                
+                # 메뉴명과 함께 나오는 가격
+                r'([가-힣\w\s]+)\s*[:：]\s*(\d{1,3}(?:,\d{3})*)\s*원',  # 삼겹살: 15,000원
+                r'([가-힣\w\s]+)\s*\(\s*(\d{1,3}(?:,\d{3})*)\s*원\s*\)',  # 삼겹살(15,000원)
+                
+                # 1인당 가격
+                r'1인\s*(\d{1,3}(?:,\d{3})*)\s*원',
+                r'인당\s*(\d{1,3}(?:,\d{3})*)\s*원',
+                r'(\d{1,3}(?:,\d{3})*)\s*원\s*/\s*1인',
+            ]
+            
+            found_prices = []
+            menu_prices = []
+            
+            # 3. 모든 요소에서 가격 정보 추출
+            for element in all_price_elements:
+                text = element.get_text(strip=True)
+                
+                # 너무 긴 텍스트는 제외 (리뷰나 설명 텍스트일 가능성)
+                if len(text) > 200:
+                    continue
+                
+                # 가격과 관련 없는 텍스트 제외
+                if any(exclude in text for exclude in ['후기', '리뷰', '평점', '별점', '추천', '방문', '예약']):
+                    continue
+                
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, text)
+                    for match in matches:
+                        if isinstance(match, tuple):
+                            if len(match) == 2:
+                                # 메뉴명과 가격 또는 범위 가격
+                                if match[0].replace(',', '').isdigit() and match[1].replace(',', '').isdigit():
+                                    # 범위 가격
+                                    found_prices.extend([match[0], match[1]])
+                                else:
+                                    # 메뉴명과 가격
+                                    menu_name, price = match
+                                    if price.replace(',', '').isdigit():
+                                        found_prices.append(price)
+                                        menu_prices.append(f"{menu_name}: {price}원")
+                            else:
+                                found_prices.extend([m for m in match if m.replace(',', '').isdigit()])
+                        else:
+                            if match.replace(',', '').isdigit():
+                                found_prices.append(match)
+            
+            # 4. 가격 정보 정리 및 검증
+            if found_prices:
+                # 중복 제거 및 정리
+                unique_prices = list(set(found_prices))
+                
+                # 숫자로 변환 가능한 가격만 필터링
+                numeric_prices = []
+                for price in unique_prices:
+                    try:
+                        # 만원 단위 처리
+                        if '만' in price:
+                            num = float(price.replace('만', '').replace(',', ''))
+                            numeric_prices.append(int(num * 10000))
+                        else:
+                            num = int(price.replace(',', ''))
+                            # 합리적인 가격 범위 필터링 (1,000원 ~ 100,000원)
+                            if 1000 <= num <= 100000:
+                                numeric_prices.append(num)
+                    except:
+                        continue
+                
+                if numeric_prices:
+                    # 가격 통계 계산
+                    min_price = min(numeric_prices)
+                    max_price = max(numeric_prices)
+                    avg_price = sum(numeric_prices) // len(numeric_prices)
+                    
+                    # 가격 정보 설정
+                    price_info['price_range'] = f"{min_price:,}원 ~ {max_price:,}원"
+                    price_info['average_price'] = f"{avg_price:,}원"
+                    price_info['price_details'] = menu_prices[:10]  # 최대 10개
+                    
+                    logger.info(f"가격 정보 추출 성공: {len(numeric_prices)}개 가격, 평균 {avg_price:,}원")
+                else:
+                    logger.warning("유효한 가격 정보를 찾을 수 없음")
+            
+            # 5. 추가 가격 정보 검색 (Selenium 활용)
+            if not price_info['price_details'] and self.driver:
+                try:
+                    # 메뉴 탭이나 가격 정보 버튼 클릭 시도
+                    menu_buttons = self.driver.find_elements(By.CSS_SELECTOR, 'button, a, div')
+                    
+                    for button in menu_buttons:
+                        button_text = button.text.lower()
+                        if any(keyword in button_text for keyword in ['메뉴', '가격', 'menu', 'price']):
+                            try:
+                                logger.info(f"메뉴/가격 정보 버튼 클릭 시도: {button_text}")
+                                self.driver.execute_script("arguments[0].scrollIntoView();", button)
+                                time.sleep(1)
+                                button.click()
+                                time.sleep(3)
+                                
+                                # 업데이트된 페이지에서 가격 정보 재추출
+                                updated_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                                updated_price_info = self._extract_price_info_from_soup(updated_soup)
+                                
+                                if updated_price_info['price_details']:
+                                    price_info.update(updated_price_info)
+                                    logger.info("메뉴 클릭 후 가격 정보 수집 성공")
+                                    break
+                                    
+                            except Exception as e:
+                                logger.debug(f"메뉴 버튼 클릭 실패: {e}")
+                                continue
+                
+                except Exception as e:
+                    logger.debug(f"추가 가격 정보 검색 실패: {e}")
+            
+            logger.info(f"가격 정보 추출 완료: {len(price_info['price_details'])}개 가격 정보")
+            
+        except Exception as e:
+            logger.error(f"가격 정보 추출 실패: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        return price_info
+    
+    def _extract_price_info_from_soup(self, soup: BeautifulSoup) -> Dict:
+        """BeautifulSoup 객체에서 가격 정보만 추출하는 헬퍼 함수"""
+        price_info = {
+            'price_range': '',
+            'average_price': '',
+            'price_details': []
+        }
+        
+        try:
+            # 간단한 가격 추출 로직 (재귀 호출 방지)
+            price_elements = soup.find_all(['span', 'div', 'td'], string=re.compile(r'\d+.*원'))
             
             prices = []
             for elem in price_elements:
                 text = elem.get_text(strip=True)
-                # 가격 패턴 매칭 (원, 만원 등)
-                price_matches = re.findall(r'[\d,]+\s*[만]?원', text)
+                price_matches = re.findall(r'(\d{1,3}(?:,\d{3})*)\s*원', text)
                 prices.extend(price_matches)
             
             if prices:
-                # 중복 제거 및 정리
-                unique_prices = list(set(prices))
-                price_info['price_details'] = unique_prices[:10]  # 최대 10개
-                
-                # 가격 범위 추정
                 numeric_prices = []
-                for price in unique_prices:
+                for price in prices:
                     try:
-                        # 숫자만 추출하여 변환
-                        num_str = re.sub(r'[^\d,]', '', price).replace(',', '')
-                        if num_str:
-                            num = int(num_str)
-                            if '만원' in price:
-                                num *= 10000
+                        num = int(price.replace(',', ''))
+                        if 1000 <= num <= 100000:
                             numeric_prices.append(num)
                     except:
                         continue
@@ -647,16 +902,15 @@ class DiningCodeCrawler:
                     
                     price_info['price_range'] = f"{min_price:,}원 ~ {max_price:,}원"
                     price_info['average_price'] = f"{avg_price:,}원"
-            
-            logger.info(f"가격 정보 추출: {len(price_info['price_details'])}개 가격 정보")
+                    price_info['price_details'] = [f"{p}원" for p in prices[:10]]
             
         except Exception as e:
-            logger.error(f"가격 정보 추출 실패: {e}")
+            logger.debug(f"헬퍼 가격 추출 실패: {e}")
         
         return price_info
 
     def _extract_hours_info(self, detail_soup: BeautifulSoup) -> Dict[str, Any]:
-        """영업시간, 브레이크타임, 라스트오더 정보 추출 (다이닝코드 구조 맞춤)"""
+        """영업시간, 브레이크타임, 라스트오더 정보 추출 (개선된 버전)"""
         hours_info = {
             'open_hours': '',
             'holiday': '',
@@ -665,7 +919,7 @@ class DiningCodeCrawler:
         }
         
         try:
-            # 1단계: 영업시간이 포함된 리스트 아이템 찾기 (다이닝코드 구조)
+            # 1단계: 영업시간이 포함된 리스트 아이템 찾기
             hours_section = None
             list_items = detail_soup.find_all('li')
             
@@ -680,16 +934,16 @@ class DiningCodeCrawler:
                 logger.warning("영업시간 섹션을 찾을 수 없음")
                 return hours_info
             
-            # 2단계: Selenium으로 토글 버튼 클릭하여 상세 정보 수집
+            # 2단계: Selenium으로 토글 버튼 클릭하여 상세 정보 수집 (개선된 버전)
             expanded_hours_text = ""
             if self.driver:
                 try:
-                    # 영업시간 토글 버튼 찾기
+                    # 영업시간 토글 버튼 찾기 (더 정확한 방법)
                     toggle_buttons = self.driver.find_elements(By.CSS_SELECTOR, 'button')
                     
                     for button in toggle_buttons:
                         try:
-                            # 버튼 근처에 영업시간 관련 텍스트가 있는지 확인
+                            # 버튼의 부모나 형제 요소에서 영업시간 관련 텍스트 확인
                             parent = button.find_element(By.XPATH, '..')
                             parent_text = parent.text
                             
@@ -700,38 +954,57 @@ class DiningCodeCrawler:
                                     alt_text = img.get_attribute('alt') or ''
                                     if '토글' in alt_text or 'toggle' in alt_text.lower():
                                         logger.info(f"영업시간 토글 버튼 클릭 시도")
-                                        self.driver.execute_script("arguments[0].click();", button)
-                                        time.sleep(2)  # 토글 애니메이션 대기
                                         
-                                        # 업데이트된 페이지 소스로 다시 파싱
-                                        updated_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                                        # 스크롤하여 버튼이 보이도록 조정
+                                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", button)
+                                        time.sleep(1)
+                                        
+                                        # 클릭
+                                        self.driver.execute_script("arguments[0].click();", button)
+                                        
+                                        # 토글 애니메이션 및 데이터 로딩 대기 (개선된 대기 시간)
+                                        logger.info("영업시간 상세 정보 로딩 대기 중...")
+                                        time.sleep(5)  # 3초에서 5초로 증가
+                                        
+                                        # 추가 데이터 로딩 확인
+                                        for wait_attempt in range(3):
+                                            updated_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                                            page_text = updated_soup.get_text()
+                                            
+                                            # 요일별 정보가 로드되었는지 확인
+                                            weekday_count = sum(1 for day in ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'] if day in page_text)
+                                            if weekday_count >= 3:  # 최소 3개 요일 정보가 있으면 로딩 완료로 판단
+                                                logger.info(f"요일별 정보 로딩 완료: {weekday_count}개 요일 감지")
+                                                break
+                                            
+                                            logger.info(f"추가 로딩 대기 중... (시도 {wait_attempt + 1}/3)")
+                                            time.sleep(2)
                                         
                                         # 확장된 영업시간 정보 찾기 (개선된 방법)
-                                        # 1차: 원래 영업시간 섹션에서 확장된 내용 찾기
                                         updated_list_items = updated_soup.find_all('li')
                                         
                                         for updated_li in updated_list_items:
                                             updated_text = updated_li.get_text()
+                                            
                                             # 날짜별 영업시간 패턴이 있는지 확인
                                             if re.search(r'\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)', updated_text):
-                                                # 블로그 리뷰나 기타 내용이 아닌 실제 영업시간 정보인지 확인
-                                                if not any(word in updated_text for word in ['블로그', '후기', '리뷰', '방문', '추천', '맛집', '오픈런', '웨이팅', '테이블링']):
-                                                    # 영업시간 관련 키워드가 포함되어 있는지 확인
+                                                # 실제 영업시간 정보인지 확인 (리뷰나 기타 내용 제외)
+                                                if not any(word in updated_text for word in ['블로그', '후기', '리뷰', '방문', '추천', '맛집']):
                                                     if any(keyword in updated_text for keyword in ['영업시간', '라스트오더', '휴무일', '휴무']):
                                                         expanded_hours_text = updated_text
                                                         logger.info(f"확장된 영업시간 정보 수집: {expanded_hours_text[:200]}...")
                                                         break
                                         
-                                        # 2차: 직접 영업시간 패턴 검색
+                                        # 패턴 매칭으로 추가 시도
                                         if not expanded_hours_text:
-                                            # 페이지 전체에서 날짜별 영업시간 패턴 추출
                                             page_text = updated_soup.get_text()
                                             
-                                            # 날짜별 영업시간/휴무 패턴 찾기
+                                            # 개선된 날짜별 영업시간 패턴
                                             date_patterns = [
-                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*영업시간:\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}[^가-힣]*?라스트오더:\s*\d{1,2}:\d{2})',
-                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*휴무일?)',
-                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*영업시간:\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})'
+                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*[^\n]*?영업시간[^\n]*?\d{1,2}:\d{2}[^\n]*)',
+                                                r'(\d{1,2}월\s*\d{1,2}일\s*\([월화수목금토일]\)\s*[^\n]*?휴무[^\n]*)',
+                                                r'([월화수목금토일]요일[^\n]*?영업시간[^\n]*?\d{1,2}:\d{2}[^\n]*)',
+                                                r'([월화수목금토일]요일[^\n]*?휴무[^\n]*)'
                                             ]
                                             
                                             found_dates = []
@@ -741,7 +1014,7 @@ class DiningCodeCrawler:
                                             
                                             if found_dates:
                                                 expanded_hours_text = ' '.join(found_dates)
-                                                logger.info(f"패턴 매칭으로 영업시간 정보 수집: {expanded_hours_text[:200]}...")
+                                                logger.info(f"패턴 매칭으로 영업시간 정보 수집: {len(found_dates)}개 항목")
                                         
                                         break
                                 break
@@ -751,11 +1024,11 @@ class DiningCodeCrawler:
                 except Exception as e:
                     logger.warning(f"토글 버튼 클릭 실패: {e}")
             
-            # 3단계: 텍스트 파싱
+            # 3단계: 텍스트 파싱 (개선된 버전)
             hours_text = expanded_hours_text if expanded_hours_text else hours_section.get_text(strip=True)
             logger.info(f"파싱할 영업시간 텍스트: {hours_text[:300]}...")
             
-            # 날짜별 영업시간을 요일별로 변환
+            # 날짜별 영업시간을 요일별로 변환 (개선된 로직)
             day_hours = {}
             holiday_days = []
             
@@ -789,68 +1062,94 @@ class DiningCodeCrawler:
                     logger.info(f"브레이크타임 추출: {hours_info['break_time']}")
                     break
             
-            # 날짜별 영업시간 패턴 매칭
-            # 예: "6월 29일(일) 휴무일", "6월 30일(월) 영업시간: 11:30 - 21:00 라스트오더: 20:20"
+            # 개선된 날짜별/요일별 영업시간 패턴 매칭
             date_patterns = [
-                # 휴무일 패턴
+                # 휴무일 패턴 (다양한 형태)
                 r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*휴무',
+                r'([월화수목금토일])요일\s*휴무',
+                r'([월화수목금토일])\s*[:：]?\s*휴무',
+                
                 # 영업시간 패턴 (라스트오더 포함)
                 r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s*라스트오더:\s*(\d{1,2}:\d{2}))?',
+                r'([월화수목금토일])요일\s*영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s*라스트오더:\s*(\d{1,2}:\d{2}))?',
                 # 간단한 영업시간 패턴
-                r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
+                r'(\d{1,2}월\s*\d{1,2}일)\s*\(([월화수목금토일])\)\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
+                r'([월화수목금토일])요일\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
             ]
-            
+             
             for pattern in date_patterns:
                 matches = re.findall(pattern, hours_text)
                 for match in matches:
-                    if len(match) == 2:  # 휴무일
-                        date, day = match
-                        holiday_days.append(day)
-                        logger.info(f"휴무일 발견: {day}요일")
-                    elif len(match) >= 4:  # 영업시간
-                        if len(match) == 5:  # 라스트오더 포함
-                            date, day, start_time, end_time, last_order = match
-                            if last_order:
-                                day_hours[day] = f"{start_time}-{end_time} (L.O: {last_order})"
-                            else:
-                                day_hours[day] = f"{start_time}-{end_time}"
-                        else:  # 기본 영업시간
-                            date, day, start_time, end_time = match[:4]
-                            day_hours[day] = f"{start_time}-{end_time}"
-                        logger.info(f"영업시간 발견: {day}요일 {day_hours[day]}")
+                    if len(match) >= 2:
+                        if '휴무' in pattern:
+                            # 휴무일 처리
+                            if len(match) == 2 and match[0] and match[1]:
+                                day = match[1]
+                                holiday_days.append(day)
+                                logger.info(f"휴무일 발견: {day}요일")
+                            elif len(match) == 1:
+                                day = match[0]
+                                holiday_days.append(day)
+                                logger.info(f"휴무일 발견: {day}요일")
+                        else:
+                            # 영업시간 처리
+                            if len(match) >= 4:
+                                if match[0] and '월' in str(match[0]):
+                                    # 날짜 형태: (날짜, 요일, 시작시간, 종료시간, [라스트오더])
+                                    day = match[1] if len(match) > 1 else None
+                                    start_time = match[2] if len(match) > 2 else None
+                                    end_time = match[3] if len(match) > 3 else None
+                                    last_order = match[4] if len(match) > 4 else None
+                                else:
+                                    # 요일 형태: (요일, 시작시간, 종료시간, [라스트오더])
+                                    day = match[0]
+                                    start_time = match[1] if len(match) > 1 else None
+                                    end_time = match[2] if len(match) > 2 else None
+                                    last_order = match[3] if len(match) > 3 else None
+                                
+                                if day and start_time and end_time:
+                                    hours_str = f"{start_time}-{end_time}"
+                                    if last_order:
+                                        hours_str += f" (L.O: {last_order})"
+                                    elif hours_info['last_order']:
+                                        hours_str += f" (L.O: {hours_info['last_order']})"
+                                    
+                                    day_hours[day] = hours_str
+                                    logger.info(f"영업시간 발견: {day}요일 {hours_str}")
             
             # 기본 영업시간 패턴도 확인 (토글되지 않은 경우)
-            basic_patterns = [
-                r'영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
-                r'오늘.*?영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
-            ]
+            if not day_hours:
+                basic_patterns = [
+                    r'영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})',
+                    r'오늘.*?영업시간:\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})'
+                ]
+                
+                for pattern in basic_patterns:
+                    matches = re.findall(pattern, hours_text)
+                    if matches:
+                        start_time, end_time = matches[0]
+                        # 오늘 요일 추정
+                        import datetime
+                        today = datetime.datetime.now()
+                        weekdays = ['월', '화', '수', '목', '금', '토', '일']
+                        today_korean = weekdays[today.weekday()]
+                        
+                        basic_hours = f"{start_time}-{end_time}"
+                        if hours_info['last_order']:
+                            basic_hours += f" (L.O: {hours_info['last_order']})"
+                        
+                        day_hours[today_korean] = basic_hours
+                        logger.info(f"기본 영업시간 적용: {today_korean}요일 {basic_hours}")
+                        break
             
-            for pattern in basic_patterns:
-                matches = re.findall(pattern, hours_text)
-                if matches and not day_hours:  # 요일별 정보가 없을 때만
-                    start_time, end_time = matches[0]
-                    # 오늘 요일 추정 (실제로는 현재 날짜 기준)
-                    import datetime
-                    today = datetime.datetime.now()
-                    weekdays = ['월', '화', '수', '목', '금', '토', '일']
-                    today_korean = weekdays[today.weekday()]
-                    
-                    basic_hours = f"{start_time}-{end_time}"
-                    if hours_info['last_order']:
-                        basic_hours += f" (L.O: {hours_info['last_order']})"
-                    
-                    day_hours[today_korean] = basic_hours
-                    logger.info(f"기본 영업시간 적용: {today_korean}요일 {basic_hours}")
-                    break
-            
-            # 패턴 분석 및 누락된 요일 보완
+            # 패턴 분석 및 누락된 요일 보완 (개선된 로직)
             all_days = ['월', '화', '수', '목', '금', '토', '일']
             collected_days = set(day_hours.keys())
             missing_days = [d for d in all_days if d not in collected_days and d not in holiday_days]
             
             logger.info(f"수집된 요일: {list(collected_days)}, 휴무일: {holiday_days}, 누락: {missing_days}")
             
-            # 패턴 분석하여 누락된 요일 보완
+            # 패턴 분석하여 누락된 요일 보완 (더 정교한 로직)
             if len(day_hours) > 0 and missing_days:
                 # 주중/주말 패턴 분석
                 weekday_hours = []
@@ -864,21 +1163,35 @@ class DiningCodeCrawler:
                     if day in day_hours:
                         weekend_hours.append(day_hours[day])
                 
-                # 주중 패턴 적용
-                if weekday_hours and len(set(weekday_hours)) == 1:  # 모든 주중이 같은 시간
+                # 주중 패턴 적용 (더 엄격한 조건)
+                if weekday_hours and len(set(weekday_hours)) == 1 and len(weekday_hours) >= 2:
                     common_weekday = weekday_hours[0]
                     for day in ['월', '화', '수', '목', '금']:
                         if day in missing_days:
                             day_hours[day] = common_weekday
                             logger.info(f"{day}요일에 주중 패턴 적용: {common_weekday}")
                 
-                # 주말 패턴 적용
-                if weekend_hours and len(set(weekend_hours)) == 1:  # 모든 주말이 같은 시간
+                # 주말 패턴 적용 (더 엄격한 조건)
+                if weekend_hours and len(set(weekend_hours)) == 1:
                     common_weekend = weekend_hours[0]
                     for day in ['토', '일']:
                         if day in missing_days and day not in holiday_days:
                             day_hours[day] = common_weekend
                             logger.info(f"{day}요일에 주말 패턴 적용: {common_weekend}")
+                
+                # 인접 요일 패턴 적용 (새로운 로직)
+                for missing_day in missing_days[:]:
+                    day_index = all_days.index(missing_day)
+                    
+                    # 앞뒤 요일 확인
+                    prev_day = all_days[day_index - 1] if day_index > 0 else all_days[-1]
+                    next_day = all_days[day_index + 1] if day_index < len(all_days) - 1 else all_days[0]
+                    
+                    if prev_day in day_hours and next_day in day_hours:
+                        if day_hours[prev_day] == day_hours[next_day]:
+                            day_hours[missing_day] = day_hours[prev_day]
+                            logger.info(f"{missing_day}요일에 인접 패턴 적용: {day_hours[prev_day]}")
+                            missing_days.remove(missing_day)
             
             # 최종 영업시간 문자열 생성
             if day_hours:
@@ -899,14 +1212,7 @@ class DiningCodeCrawler:
                 if len(unique_holidays) == 1:
                     hours_info['holiday'] = f"매주 {unique_holidays[0]} 휴무"
                 else:
-                    hours_info['holiday'] = ', '.join(unique_holidays) + ' 휴무'
-            elif len(day_hours) == 7:
-                hours_info['holiday'] = '연중무휴'
-            
-            # 24시간 영업 체크
-            if any(keyword in hours_text for keyword in ['24시간', '24시', '24HOUR', '24H']):
-                hours_info['open_hours'] = '24시간 영업'
-                hours_info['holiday'] = '연중무휴'
+                    hours_info['holiday'] = f"매주 {', '.join(unique_holidays)} 휴무"
             
             logger.info(f"최종 영업시간: {hours_info['open_hours']}")
             logger.info(f"휴무일: {hours_info['holiday']}")
@@ -914,10 +1220,10 @@ class DiningCodeCrawler:
             logger.info(f"라스트오더: {hours_info['last_order']}")
             
         except Exception as e:
-            logger.error(f"영업시간 추출 중 오류: {e}")
+            logger.error(f"영업시간 정보 추출 실패: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            
+        
         return hours_info
 
     def _extract_image_info(self, soup: BeautifulSoup) -> Dict:

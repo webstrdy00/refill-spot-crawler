@@ -87,7 +87,7 @@ def run_enhanced_crawling():
         if detailed_stores:
             try:
                 inserted_count = db.insert_stores_batch(detailed_stores)
-                logger.info(f"데이터베이스 저장 완료: {inserted_count}개")
+                logger.info(f"데이터베이스 저장 완료: {len(inserted_count)}개")
                 
                 # 성공 통계
                 success_rate = (success_count / len(stores)) * 100
@@ -197,8 +197,8 @@ def run_full_crawling():
                     
                     if detailed_stores:
                         inserted_count = db.insert_stores_batch(detailed_stores)
-                        total_stores += inserted_count
-                        logger.info(f"{region['name']} 지역: {inserted_count}개 저장")
+                        total_stores += len(inserted_count)
+                        logger.info(f"{region['name']} 지역: {len(inserted_count)}개 저장")
             
             except Exception as e:
                 logger.error(f"{region['name']} 지역 크롤링 실패: {e}")
