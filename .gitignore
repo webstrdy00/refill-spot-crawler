@@ -26,6 +26,7 @@ venv/
 env/
 ENV/
 .cursor/
+data/images
 
 # IDE
 .vscode/

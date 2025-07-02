@@ -10,6 +10,9 @@ python-dotenv==1.0.0
 tqdm==4.66.1
 lxml==4.9.3
 Pillow==10.1.0
+# 이미지 다운로드 및 처리
+requests>=2.31.0
+Pillow>=10.1.0
 
 # 3단계 고도화 기능 추가 의존성
 typing-extensions==4.8.0

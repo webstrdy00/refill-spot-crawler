@@ -36,9 +36,32 @@ logger = logging.getLogger(__name__)
 os.makedirs('data', exist_ok=True)
 
 class DiningCodeCrawler:
-    def __init__(self):
+    def __init__(self, enable_image_download: bool = True):
         self.driver = None
         self.wait = None
+        self.enable_image_download = enable_image_download
+        
+        # 이미지 매니저 초기화
+        if self.enable_image_download:
+            try:
+                from .image_manager import ImageManager
+                self.image_manager = ImageManager()
+                logger.info("이미지 매니저 초기화 완료")
+            except ImportError:
+                try:
+                    import sys
+                    import os
+                    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+                    from core.image_manager import ImageManager
+                    self.image_manager = ImageManager()
+                    logger.info("이미지 매니저 초기화 완료")
+                except Exception as e:
+                    logger.warning(f"이미지 매니저 초기화 실패: {e}")
+                    self.image_manager = None
+                    self.enable_image_download = False
+        else:
+            self.image_manager = None
+        
         self.setup_driver()
         
     def setup_driver(self):
@@ -525,10 +548,28 @@ class DiningCodeCrawler:
                 extraction_errors.append(f"영업시간 정보 추출 실패: {e}")
                 logger.warning(f"영업시간 정보 추출 실패: {e}")
             
-            # 4. 이미지 URL 수집 (에러 핸들링 강화)
+            # 4. 이미지 정보 수집 및 다운로드 (에러 핸들링 강화)
             try:
                 image_info = self._extract_image_info(soup)
                 detail_info.update(image_info)
+                
+                # 이미지 다운로드 옵션이 활성화된 경우
+                if self.enable_image_download and self.image_manager:
+                    logger.info(f"이미지 다운로드 시작: {detail_info.get('name', 'Unknown')}")
+                    download_result = self.image_manager.download_store_images(detail_info)
+                    
+                    # 다운로드된 로컬 경로로 업데이트 (대표 이미지만)
+                    if download_result.get('main_image'):
+                        detail_info['main_image_local'] = download_result['main_image']
+                        logger.info(f"대표 이미지 로컬 저장: {os.path.basename(download_result['main_image'])}")
+                    
+                    # 다운로드 통계
+                    stats = download_result.get('download_stats', {})
+                    if stats.get('successful', 0) > 0:
+                        logger.info(f"이미지 다운로드 성공: {stats['successful']}/{stats['total_attempted']}")
+                    else:
+                        logger.warning(f"이미지 다운로드 실패")
+                
                 logger.debug("이미지 정보 추출 성공")
             except Exception as e:
                 extraction_errors.append(f"이미지 정보 추출 실패: {e}")
@@ -1233,7 +1274,7 @@ class DiningCodeCrawler:
         return hours_info
 
     def _extract_image_info(self, soup: BeautifulSoup) -> Dict:
-        """이미지 URL 수집 (강화)"""
+        """가게 대표 이미지 추출 (다이닝코드 구조에 맞게 최적화)"""
         image_info = {
             'image_urls': [],
             'main_image': '',
@@ -1242,32 +1283,120 @@ class DiningCodeCrawler:
         }
         
         try:
-            # 모든 이미지 요소 찾기
-            img_elements = soup.find_all('img')
+            # 1. 가게 대표 이미지 추출 (페이지 상단의 큰 이미지)
+            main_image_found = False
             
-            for img in img_elements:
-                src = img.get('src') or img.get('data-src') or img.get('data-lazy')
-                if src and src.startswith('http'):
-                    # 이미지 분류
-                    alt_text = img.get('alt', '').lower()
-                    class_name = ' '.join(img.get('class', [])).lower()
+            # 방법 1: 대표 이미지 섹션에서 찾기
+            main_image_selectors = [
+                'img[alt*="대표"]',
+                'img[alt*="메인"]', 
+                'img[class*="main"]',
+                'img[class*="hero"]',
+                'img[class*="banner"]',
+                '.main-image img',
+                '.hero-image img',
+                '.store-image img',
+                '.restaurant-image img'
+            ]
+            
+            for selector in main_image_selectors:
+                main_img = soup.select_one(selector)
+                if main_img:
+                    src = main_img.get('src') or main_img.get('data-src') or main_img.get('data-lazy')
+                    if src and src.startswith('http'):
+                        image_info['main_image'] = src
+                        main_image_found = True
+                        logger.info(f"대표 이미지 발견 (방법1): {selector}")
+                        break
+            
+            # 방법 2: 페이지 상단의 첫 번째 큰 이미지 찾기
+            if not main_image_found:
+                # 큰 이미지 (보통 대표 이미지는 크기가 큼)
+                all_images = soup.find_all('img')
+                for img in all_images[:10]:  # 상위 10개 이미지만 체크
+                    src = img.get('src') or img.get('data-src') or img.get('data-lazy')
+                    if src and src.startswith('http'):
+                        # 작은 아이콘이나 UI 요소 제외
+                        if not any(keyword in src.lower() for keyword in [
+                            'icon', 'logo', 'btn', 'button', 'arrow', 'close', 
+                            'addphoto', 'placeholder', 'default', 'loading'
+                        ]):
+                            # alt 텍스트나 클래스에서 대표 이미지 힌트 찾기
+                            alt_text = img.get('alt', '').lower()
+                            class_name = ' '.join(img.get('class', [])).lower()
+                            
+                            if (any(keyword in alt_text for keyword in ['대표', 'main', '가게', '매장']) or
+                                any(keyword in class_name for keyword in ['main', 'hero', 'banner', 'primary'])):
+                                image_info['main_image'] = src
+                                main_image_found = True
+                                logger.info(f"대표 이미지 발견 (방법2): alt='{alt_text}', class='{class_name}'")
+                                break
+            
+            # 방법 3: JavaScript로 동적으로 로드된 이미지 찾기
+            if not main_image_found and self.driver:
+                try:
+                    # 페이지 상단의 가장 큰 이미지 찾기
+                    js_script = """
+                    var images = document.querySelectorAll('img');
+                    var largestImage = null;
+                    var maxArea = 0;
                     
-                    if any(keyword in alt_text + class_name for keyword in ['menu', '메뉴']):
-                        image_info['menu_images'].append(src)
-                    elif any(keyword in alt_text + class_name for keyword in ['interior', '내부', '인테리어']):
-                        image_info['interior_images'].append(src)
-                    elif any(keyword in alt_text + class_name for keyword in ['main', '대표', 'logo']):
-                        if not image_info['main_image']:
+                    for (var i = 0; i < Math.min(images.length, 10); i++) {
+                        var img = images[i];
+                        var rect = img.getBoundingClientRect();
+                        var area = rect.width * rect.height;
+                        
+                        // 화면 상단 절반에 있고, 충분히 큰 이미지
+                        if (rect.top < window.innerHeight / 2 && area > 10000) {
+                            var src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy');
+                            if (src && src.startsWith('http') && 
+                                !src.includes('icon') && !src.includes('logo') && 
+                                !src.includes('btn') && !src.includes('addphoto')) {
+                                if (area > maxArea) {
+                                    maxArea = area;
+                                    largestImage = src;
+                                }
+                            }
+                        }
+                    }
+                    return largestImage;
+                    """
+                    
+                    js_main_image = self.driver.execute_script(js_script)
+                    if js_main_image:
+                        image_info['main_image'] = js_main_image
+                        main_image_found = True
+                        logger.info(f"대표 이미지 발견 (방법3-JS): 가장 큰 이미지")
+                        
+                except Exception as js_error:
+                    logger.warning(f"JavaScript 이미지 검색 실패: {js_error}")
+            
+            # 방법 4: 백업 - 첫 번째 유효한 이미지 (UI 요소 제외)
+            if not main_image_found:
+                all_images = soup.find_all('img')
+                for img in all_images[:15]:  # 상위 15개 체크
+                    src = img.get('src') or img.get('data-src') or img.get('data-lazy')
+                    if src and src.startswith('http'):
+                        # UI 요소나 작은 아이콘 제외
+                        if not any(keyword in src.lower() for keyword in [
+                            'icon', 'logo', 'btn', 'button', 'arrow', 'close', 
+                            'addphoto', 'placeholder', 'default', 'loading',
+                            'common', 'ui', 'sprite'
+                        ]):
                             image_info['main_image'] = src
-                    
-                    image_info['image_urls'].append(src)
+                            main_image_found = True
+                            logger.info(f"대표 이미지 발견 (방법4-백업): 첫 번째 유효 이미지")
+                            break
             
-            # 중복 제거
-            image_info['image_urls'] = list(set(image_info['image_urls']))[:20]  # 최대 20개
-            image_info['menu_images'] = list(set(image_info['menu_images']))[:10]
-            image_info['interior_images'] = list(set(image_info['interior_images']))[:10]
+            # 2. 추가 이미지는 수집하지 않음 (대표 이미지만 수집)
+            image_info['image_urls'] = []
             
-            logger.info(f"이미지 정보 추출: 총 {len(image_info['image_urls'])}개")
+            if main_image_found:
+                logger.info(f"✅ 가게 대표 이미지 추출 성공")
+                logger.info(f"📸 대표 이미지: {image_info['main_image'][:100]}...")
+                logger.info(f"📸 추가 이미지: 수집 안함 (대표 이미지만)")
+            else:
+                logger.warning("❌ 가게 대표 이미지를 찾을 수 없음")
             
         except Exception as e:
             logger.error(f"이미지 정보 추출 실패: {e}")

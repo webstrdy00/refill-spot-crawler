@@ -187,30 +187,30 @@ class SupabaseMigration:
         return filtered_items[:10]
     
     def _process_image_urls(self, store: Dict) -> List[str]:
-        """이미지 URL 검증 및 필터링"""
+        """이미지 URL 검증 및 필터링 (대표 이미지만)"""
         urls = []
         
-        # 다양한 이미지 필드에서 수집
-        image_fields = ['main_image', 'image_urls', 'menu_images', 'interior_images']
-        
-        for field in image_fields:
-            value = store.get(field)
-            if value:
-                if isinstance(value, list):
-                    urls.extend(value)
-                elif isinstance(value, str):
-                    urls.append(value)
+        # 로컬 대표 이미지 우선 사용
+        if store.get('main_image_local'):
+            urls.append(store['main_image_local'])
+            logger.info(f"로컬 대표 이미지 사용: {os.path.basename(store['main_image_local'])}")
+        elif store.get('main_image'):
+            urls.append(store['main_image'])
+            logger.info("원본 대표 이미지 URL 사용")
         
         # URL 검증 및 중복 제거
         valid_urls = []
         seen = set()
         
         for url in urls:
-            if url and url not in seen and url.startswith(('http://', 'https://')):
-                valid_urls.append(url)
-                seen.add(url)
+            if url and url not in seen:
+                # 로컬 파일 경로이거나 기본적인 URL 검증
+                if (url.startswith(('data/', 'data\\', '/')) or 
+                    url.startswith(('http://', 'https://', '//'))):
+                    valid_urls.append(url)
+                    seen.add(url)
         
-        return valid_urls[:5]
+        return valid_urls[:1]  # 대표 이미지 1개만
     
     def _process_open_hours(self, store: Dict) -> Optional[str]:
         """영업시간 정보 정리"""

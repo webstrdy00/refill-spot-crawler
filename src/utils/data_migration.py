@@ -234,24 +234,16 @@ class DataMigration:
         return list(set(filter(None, items)))[:10]  # 최대 10개까지
     
     def _process_image_urls(self, store: Dict) -> List[str]:
-        """이미지 URL 검증 및 필터링"""
+        """이미지 URL 검증 및 필터링 (대표 이미지만)"""
         urls = []
         
-        # main_image
-        if store.get('main_image'):
+        # 로컬 대표 이미지 우선 사용
+        if store.get('main_image_local'):
+            urls.append(store['main_image_local'])
+            logger.info(f"로컬 대표 이미지 사용: {os.path.basename(store['main_image_local'])}")
+        elif store.get('main_image'):
             urls.append(store['main_image'])
-        
-        # image_urls
-        if store.get('image_urls'):
-            urls.extend(store['image_urls'])
-        
-        # menu_images
-        if store.get('menu_images'):
-            urls.extend(store['menu_images'])
-        
-        # interior_images (최대 2개만)
-        if store.get('interior_images'):
-            urls.extend(store['interior_images'][:2])
+            logger.info("원본 대표 이미지 URL 사용")
         
         # URL 검증 및 중복 제거
         valid_urls = []
@@ -259,12 +251,13 @@ class DataMigration:
         
         for url in urls:
             if url and url not in seen:
-                # 기본적인 URL 검증
-                if url.startswith(('http://', 'https://', '//')):
+                # 로컬 파일 경로이거나 기본적인 URL 검증
+                if (url.startswith(('data/', 'data\\', '/')) or 
+                    url.startswith(('http://', 'https://', '//'))):
                     valid_urls.append(url)
                     seen.add(url)
         
-        return valid_urls[:5]  # 최대 5개까지
+        return valid_urls[:1]  # 대표 이미지 1개만
     
     def _process_open_hours(self, store: Dict) -> Optional[str]:
         """영업시간 정보 정리"""
