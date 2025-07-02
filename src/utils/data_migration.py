@@ -274,14 +274,15 @@ class DataMigration:
         if not open_hours:
             return None
         
-        # 추가 정보 포함
+        # 추가 정보 포함 (라스트오더는 크롤링 단계에서 이미 포함되어 있으므로 제외)
         parts = [open_hours]
         
         if store.get('break_time'):
             parts.append(f"브레이크타임: {store['break_time']}")
         
-        if store.get('last_order'):
-            parts.append(f"라스트오더: {store['last_order']}")
+        # 라스트오더는 이미 open_hours에 포함되어 있으므로 중복 추가하지 않음
+        # if store.get('last_order'):
+        #     parts.append(f"라스트오더: {store['last_order']}")
         
         if store.get('holiday'):
             parts.append(f"휴무: {store['holiday']}")

@@ -219,6 +219,7 @@ class SupabaseMigration:
         if not open_hours:
             return None
         
+        # 라스트오더는 이미 open_hours에 포함되어 있으므로 중복 추가하지 않음
         parts = [str(open_hours)]
         
         if store.get('break_time'):

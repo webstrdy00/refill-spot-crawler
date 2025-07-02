@@ -1109,11 +1109,12 @@ class DiningCodeCrawler:
                                     last_order = match[3] if len(match) > 3 else None
                                 
                                 if day and start_time and end_time:
+                                    # L.O는 개별 요일에 붙이지 않고, 마지막에 한 번만 추가
                                     hours_str = f"{start_time}-{end_time}"
-                                    if last_order:
-                                        hours_str += f" (L.O: {last_order})"
-                                    elif hours_info['last_order']:
-                                        hours_str += f" (L.O: {hours_info['last_order']})"
+                                    
+                                    # 개별 요일의 라스트오더가 있으면 전체 라스트오더로 저장 (중복 방지)
+                                    if last_order and not hours_info['last_order']:
+                                        hours_info['last_order'] = last_order
                                     
                                     day_hours[day] = hours_str
                                     logger.info(f"영업시간 발견: {day}요일 {hours_str}")
@@ -1135,9 +1136,8 @@ class DiningCodeCrawler:
                         weekdays = ['월', '화', '수', '목', '금', '토', '일']
                         today_korean = weekdays[today.weekday()]
                         
+                        # L.O는 개별 요일에 붙이지 않고, 마지막에 한 번만 추가
                         basic_hours = f"{start_time}-{end_time}"
-                        if hours_info['last_order']:
-                            basic_hours += f" (L.O: {hours_info['last_order']})"
                         
                         day_hours[today_korean] = basic_hours
                         logger.info(f"기본 영업시간 적용: {today_korean}요일 {basic_hours}")
@@ -1205,7 +1205,12 @@ class DiningCodeCrawler:
                     elif day in holiday_days:
                         hours_parts.append(f"{day}: 휴무")
                 
+                # 기본 영업시간 설정
                 hours_info['open_hours'] = ', '.join(hours_parts)
+                
+                # 라스트오더가 있으면 맨 마지막에 추가
+                if hours_info['last_order']:
+                    hours_info['open_hours'] += f" / 라스트오더: {hours_info['last_order']}"
             
             # 휴무일 설정
             if holiday_days:
