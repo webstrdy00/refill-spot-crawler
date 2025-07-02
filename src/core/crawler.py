@@ -331,14 +331,15 @@ class DiningCodeCrawler:
                         elif re.match(r'^\d+\s+', name_text):
                             name_text = re.sub(r'^\d+\s+', '', name_text)
                         
-                        # 지점명 분리
+                        # 지점명 분리 (하지만 가게명은 원본 그대로 저장)
                         place_elem = title_elem.find('span', class_='Info__Title__Place')
                         if place_elem:
                             store_info['branch'] = place_elem.get_text(strip=True)
-                            # 지점명 제거하여 순수 가게명 추출
-                            store_info['name'] = name_text.replace(store_info['branch'], '').strip()
+                            # 가게명은 원본 그대로 저장 (지점명 포함)
+                            store_info['name'] = name_text.strip()
                         else:
                             store_info['name'] = name_text.strip()
+                            store_info['branch'] = ''
                     
                     # data 속성에서 위치정보 추출 시도
                     data_lat = block.get('data-lat') or block.get('data-latitude')

@@ -88,15 +88,16 @@ def test_simple_crawling():
                         if '. ' in name_text:
                             name_text = name_text.split('. ', 1)[1]
                         
-                        # 지점명 분리
+                        # 지점명 분리 (하지만 가게명은 원본 그대로 저장)
                         place_elem = title_elem.find('span', class_='Info__Title__Place')
                         if place_elem:
                             branch = place_elem.get_text(strip=True)
-                            name = name_text.replace(branch, '').strip()
-                            store_info['name'] = name
+                            # 가게명은 원본 그대로 저장 (지점명 포함)
+                            store_info['name'] = name_text
                             store_info['branch'] = branch
                         else:
                             store_info['name'] = name_text
+                            store_info['branch'] = ''
                     
                     # 평점 정보 추출
                     score_elem = block.find('p', class_='Score')
