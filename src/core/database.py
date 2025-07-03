@@ -154,25 +154,24 @@ class DatabaseManager:
             for store in stores_data:
                 cursor.execute("""
                     INSERT INTO stores (
-                        name, address, description, position_lat, position_lng, 
-                        position_x, position_y, naver_rating, kakao_rating, diningcode_rating,
-                        open_hours, open_hours_raw, price, refill_items, image_urls,
-                        phone_number, diningcode_place_id, raw_categories_diningcode, status,
-                        menu_items, menu_categories, signature_menu, price_range, average_price,
-                        price_details, break_time, last_order, holiday, main_image,
-                        menu_images, interior_images, review_summary, keywords, atmosphere,
-                        website, social_media, refill_type, refill_conditions, is_confirmed_refill
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
+                    name, address, position_lat, position_lng, 
+                    position_x, position_y, naver_rating, kakao_rating, diningcode_rating,
+                    open_hours, open_hours_raw, price, refill_items, image_urls,
+                    phone_number, diningcode_place_id, raw_categories_diningcode, status,
+                    menu_items, menu_categories, signature_menu,
+                    price_details, break_time, last_order, holiday, main_image,
+                    menu_images, interior_images, review_summary, keywords, atmosphere,
+                    website, social_media, refill_type, refill_conditions, is_confirmed_refill
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
                     ON CONFLICT (diningcode_place_id) 
                     DO UPDATE SET
                         name = EXCLUDED.name,
                         address = COALESCE(EXCLUDED.address, stores.address),
-                        description = COALESCE(EXCLUDED.description, stores.description),
                         position_lat = COALESCE(EXCLUDED.position_lat, stores.position_lat),
                         position_lng = COALESCE(EXCLUDED.position_lng, stores.position_lng),
                         position_x = COALESCE(EXCLUDED.position_x, stores.position_x),
@@ -191,8 +190,6 @@ class DatabaseManager:
                         menu_items = COALESCE(EXCLUDED.menu_items, stores.menu_items),
                         menu_categories = COALESCE(EXCLUDED.menu_categories, stores.menu_categories),
                         signature_menu = COALESCE(EXCLUDED.signature_menu, stores.signature_menu),
-                        price_range = COALESCE(EXCLUDED.price_range, stores.price_range),
-                        average_price = COALESCE(EXCLUDED.average_price, stores.average_price),
                         price_details = COALESCE(EXCLUDED.price_details, stores.price_details),
                         break_time = COALESCE(EXCLUDED.break_time, stores.break_time),
                         last_order = COALESCE(EXCLUDED.last_order, stores.last_order),
@@ -213,7 +210,6 @@ class DatabaseManager:
                 """, (
                     store.get('name'),
                     store.get('address'),
-                    store.get('description'),
                     store.get('position_lat'),
                     store.get('position_lng'),
                     store.get('position_x'),
@@ -233,8 +229,6 @@ class DatabaseManager:
                     json.dumps(store.get('menu_items', []), ensure_ascii=False) if store.get('menu_items') else None,
                     store.get('menu_categories', []),
                     store.get('signature_menu', []),
-                    store.get('price_range', ''),
-                    store.get('average_price', ''),
                     store.get('price_details', []),
                     store.get('break_time', ''),
                     store.get('last_order', ''),
@@ -298,10 +292,10 @@ class DatabaseManager:
         
         try:
             cursor.execute("""
-                INSERT INTO crawling_logs (keyword, rect_area, started_at, status)
-                VALUES (%s, %s, %s, 'running')
+                INSERT INTO crawling_logs (keyword, rect_area, status)
+                VALUES (%s, %s, 'running')
                 RETURNING id
-            """, (keyword, rect_area, datetime.now()))
+            """, (keyword, rect_area))
             
             log_id = cursor.fetchone()[0]
             logger.info(f"크롤링 세션 시작: {log_id}")
@@ -450,7 +444,7 @@ class DatabaseManager:
                     COUNT(CASE WHEN is_confirmed_refill = true THEN 1 END) as confirmed_refill_stores,
                     COUNT(CASE WHEN menu_items IS NOT NULL AND array_length(menu_items, 1) > 0 THEN 1 END) as stores_with_menu,
                     COUNT(CASE WHEN image_urls IS NOT NULL AND array_length(image_urls, 1) > 0 THEN 1 END) as stores_with_images,
-                    COUNT(CASE WHEN price_range != '' THEN 1 END) as stores_with_price,
+                    COUNT(CASE WHEN price != '' THEN 1 END) as stores_with_price,
                     AVG(CASE WHEN diningcode_rating IS NOT NULL THEN diningcode_rating END) as avg_rating
                 FROM stores
             """)
@@ -532,7 +526,7 @@ def test_database():
             'diningcode_place_id': 'test_001',
             'name': '테스트 무한리필 가게',
             'address': '서울특별시 강남구 테스트동 123',
-            'description': '테스트용 가게입니다',
+
             'position_lat': 37.5665,
             'position_lng': 126.9780,
             'phone_number': '02-1234-5678',

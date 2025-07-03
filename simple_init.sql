@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS stores (
   diningcode_place_id VARCHAR(50) UNIQUE,
   name VARCHAR(200) NOT NULL,
   address TEXT,
-  description TEXT,
   
   -- 위치 정보
   position_lat DECIMAL(10, 8),
@@ -37,8 +36,6 @@ CREATE TABLE IF NOT EXISTS stores (
   
   -- 가격 정보
   price TEXT,
-  price_range TEXT,
-  average_price TEXT,
   price_details TEXT[],
   
   -- 무한리필 정보
@@ -82,8 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_stores_name ON stores(name);
 CREATE INDEX IF NOT EXISTS idx_stores_status ON stores(status);
 CREATE INDEX IF NOT EXISTS idx_stores_position ON stores(position_lat, position_lng);
 
--- 기본 카테고리 데이터 삽입
+-- 기본 카테고리 데이터 삽입 (7개로 제한)
 INSERT INTO categories (name) VALUES 
-('무한리필'), ('고기'), ('뷔페'), ('일식'), ('중식'), ('양식'), 
-('피자'), ('치킨'), ('한식'), ('해산물')
+('고기'), ('해산물'), ('양식'), ('한식'), ('중식'), ('일식'), ('디저트')
 ON CONFLICT (name) DO NOTHING; 

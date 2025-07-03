@@ -1387,249 +1387,37 @@ class DiningCodeCrawler:
         return menu_items
     
     def _extract_price_info(self, soup: BeautifulSoup) -> Dict:
-        """가격 정보 추출 (무한리필 메뉴 특화)"""
+        """가격 정보 추출 (단순화)"""
         price_info = {
-            'price_range': '',
-            'average_price': '',
-            'price_details': [],
-            'refill_prices': []  # 무한리필 가격 정보 전용
-        }
-        
-        try:
-            logger.info("💰 가격 정보 추출 시작...")
-            
-            # 1. 무한리필 메뉴 가격 정보 추출 (운영 정보에서)
-            refill_prices = self._extract_refill_prices_from_operation_info(soup)
-            price_info['refill_prices'] = refill_prices
-            
-            # 2. 일반 가격 정보 추출
-            found_prices = []
-            menu_prices = []
-            
-            # 가격 패턴 (리뷰 제외)
-            price_patterns = [
-                # 기본 가격 패턴
-                r'(\d{1,3}(?:,\d{3})*)\s*원',
-                # 메뉴명과 가격
-                r'([가-힣\s\w()]+?)\s*[:：]\s*(\d{1,3}(?:,\d{3})*)\s*원',
-                # 범위 가격
-                r'(\d{1,3}(?:,\d{3})*)\s*원?\s*[-~]\s*(\d{1,3}(?:,\d{3})*)\s*원',
-                # 만원 단위
-                r'(\d{1,2})\s*만\s*(\d{1,3}(?:,\d{3})*)\s*원',
-                r'(\d{1,2})\s*만원'
-            ]
-            
-            # 3. 가격 관련 요소 찾기 (리뷰 섹션 제외)
-            price_selectors = [
-                '.menu-price', '.price', '.cost', '.amount',
-                '[class*="price"]', '[class*="Price"]', '[class*="cost"]',
-                '[class*="menu"]', '[class*="Menu"]'
-            ]
-            
-            for selector in price_selectors:
-                elements = soup.select(selector)
-                
-                for elem in elements:
-                    # 리뷰 섹션인지 확인
-                    elem_text = elem.get_text()
-                    if any(exclude in elem_text for exclude in ['리뷰', '후기', '평점', '별점', '방문', '블로그']):
-                        continue
-                    
-                    # 부모 요소도 체크
-                    parent = elem.parent
-                    if parent:
-                        parent_text = parent.get_text()
-                        if any(exclude in parent_text for exclude in ['리뷰', '후기', '평점', '별점', '방문기']):
-                            continue
-                    
-                    text = elem.get_text(strip=True)
-                    
-                    # 가격과 관련 없는 텍스트 제외
-                    if any(exclude in text for exclude in ['후기', '리뷰', '평점', '별점', '추천', '방문', '예약']):
-                        continue
-                    
-                    for pattern in price_patterns:
-                        matches = re.findall(pattern, text)
-                        for match in matches:
-                            if isinstance(match, tuple):
-                                if len(match) == 2:
-                                    # 메뉴명과 가격 또는 범위 가격
-                                    if match[0].replace(',', '').isdigit() and match[1].replace(',', '').isdigit():
-                                        # 범위 가격
-                                        found_prices.extend([match[0], match[1]])
-                                    else:
-                                        # 메뉴명과 가격
-                                        menu_name, price = match
-                                        if price.replace(',', '').isdigit():
-                                            found_prices.append(price)
-                                            menu_prices.append(f"{menu_name}: {price}원")
-                                else:
-                                    found_prices.extend([m for m in match if m.replace(',', '').isdigit()])
-                            else:
-                                if match.replace(',', '').isdigit():
-                                    found_prices.append(match)
-            
-            # 4. 테이블에서 가격 정보 추출
-            tables = soup.find_all('table')
-            for table in tables:
-                table_text = table.get_text()
-                
-                # 리뷰 테이블 제외
-                if any(exclude in table_text for exclude in ['리뷰', '후기', '평점', '별점']):
-                    continue
-                
-                rows = table.find_all('tr')
-                for row in rows:
-                    cells = row.find_all(['td', 'th'])
-                    for cell in cells:
-                        cell_text = cell.get_text(strip=True)
-                        
-                        # 가격 패턴 찾기
-                        price_matches = re.findall(r'(\d{1,3}(?:,\d{3})*)\s*원', cell_text)
-                        for price in price_matches:
-                            found_prices.append(price)
-            
-            # 5. 무한리필 가격이 있으면 우선 사용
-            if refill_prices:
-                # 무한리필 가격으로 price_details 구성 (구조화된 JSON)
-                structured_menu_items = []
-                for refill_price in refill_prices:
-                    menu_item = {
-                        'name': refill_price['name'],
-                        'price': refill_price['price'],
-                        'price_numeric': refill_price.get('price_numeric', 0),
-                        'is_recommended': refill_price.get('is_recommended', False),
-                        'type': 'refill'
-                    }
-                    structured_menu_items.append(menu_item)
-                    
-                    # 숫자 가격 추출
-                    price_num = refill_price.get('price_numeric', 0)
-                    if price_num > 0:
-                        found_prices.append(str(price_num))
-                
-                # 구조화된 메뉴 정보를 menu_items에 저장 (detail_info가 있는 경우)
-                # price_details는 기존 배열 형태 유지
-                price_info['structured_menu_items'] = structured_menu_items
-                
-                logger.info(f"무한리필 가격 정보 {len(refill_prices)}개 사용")
-            
-            # 6. 가격 정보 정리 및 검증
-            if found_prices:
-                # 중복 제거 및 정리
-                unique_prices = list(set(found_prices))
-                
-                # 숫자로 변환 가능한 가격만 필터링
-                numeric_prices = []
-                for price in unique_prices:
-                    try:
-                        # 만원 단위 처리
-                        if '만' in price:
-                            num = float(price.replace('만', '').replace(',', ''))
-                            numeric_prices.append(int(num * 10000))
-                        else:
-                            num = int(price.replace(',', ''))
-                            # 합리적인 가격 범위 필터링 (1,000원 ~ 100,000원)
-                            if 1000 <= num <= 100000:
-                                numeric_prices.append(num)
-                    except:
-                        continue
-                
-                if numeric_prices:
-                    # 가격 통계 계산
-                    min_price = min(numeric_prices)
-                    max_price = max(numeric_prices)
-                    avg_price = sum(numeric_prices) // len(numeric_prices)
-                    
-                    # 가격 정보 설정
-                    price_info['price_range'] = f"{min_price:,}원 ~ {max_price:,}원"
-                    price_info['average_price'] = f"{avg_price:,}원"
-                    price_info['price_details'] = menu_prices[:10]  # 최대 10개
-                    
-                    logger.info(f"가격 정보 추출 성공: {len(numeric_prices)}개 가격, 평균 {avg_price:,}원")
-                else:
-                    logger.warning("유효한 가격 정보를 찾을 수 없음")
-            
-            # 7. 추가 가격 정보 검색 (Selenium 활용)
-            if not price_info['price_details'] and self.driver:
-                try:
-                    # 메뉴 탭이나 가격 정보 버튼 클릭 시도
-                    menu_buttons = self.driver.find_elements(By.CSS_SELECTOR, 'button, a, div')
-                    
-                    for button in menu_buttons:
-                        button_text = button.text.lower()
-                        if any(keyword in button_text for keyword in ['메뉴', '가격', 'menu', 'price', '운영정보']):
-                            try:
-                                logger.info(f"메뉴/가격 정보 버튼 클릭 시도: {button_text}")
-                                self.driver.execute_script("arguments[0].scrollIntoView();", button)
-                                time.sleep(1)
-                                button.click()
-                                time.sleep(3)
-                                
-                                # 업데이트된 페이지에서 가격 정보 재추출
-                                updated_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                                updated_price_info = self._extract_price_info_from_soup(updated_soup)
-                                
-                                if updated_price_info['price_details']:
-                                    price_info.update(updated_price_info)
-                                    logger.info("메뉴 클릭 후 가격 정보 수집 성공")
-                                    break
-                                    
-                            except Exception as e:
-                                logger.debug(f"메뉴 버튼 클릭 실패: {e}")
-                                continue
-                
-                except Exception as e:
-                    logger.debug(f"추가 가격 정보 검색 실패: {e}")
-            
-            logger.info(f"가격 정보 추출 완료: {len(price_info['price_details'])}개 일반가격, {len(price_info['refill_prices'])}개 무한리필가격")
-            
-        except Exception as e:
-            logger.error(f"가격 정보 추출 실패: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        
-        return price_info
-    
-    def _extract_price_info_from_soup(self, soup: BeautifulSoup) -> Dict:
-        """BeautifulSoup 객체에서 가격 정보만 추출하는 헬퍼 함수"""
-        price_info = {
-            'price_range': '',
-            'average_price': '',
+            'price': '',
             'price_details': []
         }
         
         try:
-            # 간단한 가격 추출 로직 (재귀 호출 방지)
-            price_elements = soup.find_all(['span', 'div', 'td'], string=re.compile(r'\d+.*원'))
+            # 메뉴 정보에서 가격 추출
+            menu_info = self._extract_menu_with_browser_verification(soup)
             
-            prices = []
-            for elem in price_elements:
-                text = elem.get_text(strip=True)
-                price_matches = re.findall(r'(\d{1,3}(?:,\d{3})*)\s*원', text)
-                prices.extend(price_matches)
-            
-            if prices:
-                numeric_prices = []
-                for price in prices:
-                    try:
-                        num = int(price.replace(',', ''))
-                        if 1000 <= num <= 100000:
-                            numeric_prices.append(num)
-                    except:
-                        continue
+            if menu_info and menu_info.get('menu_items'):
+                menu_items = menu_info['menu_items']
                 
-                if numeric_prices:
-                    min_price = min(numeric_prices)
-                    max_price = max(numeric_prices)
-                    avg_price = sum(numeric_prices) // len(numeric_prices)
+                # 메뉴에서 가격 정보 수집
+                menu_prices = []
+                for menu in menu_items:
+                    if isinstance(menu, dict) and menu.get('price'):
+                        menu_prices.append(menu['price'])
+                
+                if menu_prices:
+                    price_info['price_details'] = menu_prices[:10]  # 최대 10개
                     
-                    price_info['price_range'] = f"{min_price:,}원 ~ {max_price:,}원"
-                    price_info['average_price'] = f"{avg_price:,}원"
-                    price_info['price_details'] = [f"{p}원" for p in prices[:10]]
+                    # 첫 번째 가격을 대표 가격으로 설정
+                    price_info['price'] = menu_prices[0]
+                    
+                    logger.info(f"메뉴에서 가격 정보 추출: {len(menu_prices)}개")
+                else:
+                    logger.info("메뉴에서 가격 정보를 찾을 수 없음")
             
         except Exception as e:
-            logger.debug(f"헬퍼 가격 추출 실패: {e}")
+            logger.error(f"가격 정보 추출 중 오류: {e}")
         
         return price_info
 
@@ -2865,6 +2653,44 @@ class DiningCodeCrawler:
         
         # 크롤링 통계 출력
         self.print_stats()
+
+    def _extract_operation_section_text(self, soup: BeautifulSoup) -> str:
+        """운영 정보 섹션 텍스트 추출 (리뷰 섹션 제외)"""
+        try:
+            # 운영 정보 관련 섹션만 추출
+            operation_sections = []
+            
+            # 메뉴 정보 섹션
+            menu_section = soup.find(lambda tag: tag.name == 'p' and tag.get_text(strip=True) == '메뉴정보')
+            if menu_section:
+                # 메뉴정보 다음 ul 태그까지
+                next_ul = menu_section.find_next_sibling('ul')
+                if next_ul:
+                    operation_sections.append(next_ul.get_text(strip=True))
+            
+            # 영업시간 정보
+            hours_elements = soup.find_all(string=re.compile(r'영업시간|운영시간'))
+            for element in hours_elements:
+                if element.parent:
+                    operation_sections.append(element.parent.get_text(strip=True))
+            
+            # 가격 정보
+            price_elements = soup.find_all(string=re.compile(r'가격|요금|원'))
+            for element in price_elements[:5]:  # 최대 5개만
+                if element.parent:
+                    operation_sections.append(element.parent.get_text(strip=True))
+            
+            # 무한리필 관련 텍스트
+            refill_elements = soup.find_all(string=re.compile(r'무한리필|무제한|셀프바|뷔페'))
+            for element in refill_elements:
+                if element.parent:
+                    operation_sections.append(element.parent.get_text(strip=True))
+            
+            return ' '.join(operation_sections)
+            
+        except Exception as e:
+            logger.error(f"운영 정보 섹션 추출 실패: {e}")
+            return soup.get_text()[:1000] if soup else ""
 
 # 테스트 실행 함수
 def test_crawling():

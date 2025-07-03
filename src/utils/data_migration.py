@@ -182,14 +182,9 @@ class DataMigration:
         }
     
     def _process_price(self, store: Dict) -> Optional[str]:
-        """가격 정보 가공"""
-        # 우선순위: price > average_price > price_range
+        """가격 정보 가공 (price 필드만 사용)"""
         if store.get('price'):
             return str(store['price'])
-        elif store.get('average_price'):
-            return store['average_price']
-        elif store.get('price_range'):
-            return store['price_range']
         elif store.get('price_details'):
             # price_details 배열에서 첫 번째 가격 정보 추출
             details = store['price_details']
@@ -313,42 +308,92 @@ class DataMigration:
         return ' | '.join(parts)[:500]  # 최대 500자
     
     def _map_categories(self, crawler_categories: List[str]) -> List[str]:
-        """크롤러 카테고리를 프로젝트 카테고리로 매핑"""
+        """크롤러 카테고리를 7개 표준 카테고리로 매핑"""
         # None 값 처리
         if not crawler_categories:
-            return ['무한리필']  # 기본 카테고리
+            return ['한식']  # 기본 카테고리
         
-        # 카테고리 매핑 테이블
+        # 카테고리 매핑 테이블 (7개로 제한)
         category_mapping = {
-            '무한리필': '무한리필',
+            # 고기
             '고기무한리필': '고기',
             '소고기무한리필': '고기',
             '삼겹살무한리필': '고기',
             '삼겹살': '고기',
             '갈비': '고기',
-            '뷔페': '뷔페',
-            '초밥뷔페': '일식',
-            '초밥': '일식',
+            '소고기': '고기',
+            '돼지고기': '고기',
+            '닭고기': '고기',
+            '스테이크': '고기',
+            '바베큐': '고기',
+            'BBQ': '고기',
+            '구이': '고기',
+            '육류': '고기',
+            
+            # 해산물
             '해산물무한리필': '해산물',
             '해산물': '해산물',
-            '한식': '한식',
-            '일식': '일식',
-            '중식': '중식',
+            '초밥': '해산물',
+            '초밥뷔페': '해산물',
+            '회': '해산물',
+            '사시미': '해산물',
+            '스시': '해산물',
+            '수산물': '해산물',
+            '생선': '해산물',
+            
+            # 양식
             '양식': '양식',
-            '피자': '피자',
-            '치킨': '치킨',
-            '족발': '족발',
-            '곱창': '곱창',
-            '스테이크': '스테이크',
-            '파스타': '파스타',
+            '서양음식': '양식',
+            '이탈리안': '양식',
+            '파스타': '양식',
+            '피자': '양식',
+            '버거': '양식',
+            '햄버거': '양식',
+            '브런치': '양식',
+            '샐러드': '양식',
+            
+            # 한식
+            '한식': '한식',
+            '한국음식': '한식',
+            '족발': '한식',
+            '보쌈': '한식',
+            '곱창': '한식',
+            '막창': '한식',
+            '치킨': '한식',
+            '찜닭': '한식',
+            '분식': '한식',
+            '떡볶이': '한식',
+            '냉면': '한식',
+            '불고기': '한식',
+            
+            # 중식
+            '중식': '중식',
+            '중국음식': '중식',
+            '차이니즈': '중식',
+            '짜장면': '중식',
+            '짬뽕': '중식',
+            '탕수육': '중식',
+            
+            # 일식
+            '일식': '일식',
+            '일본음식': '일식',
+            '돈까스': '일식',
+            '우동': '일식',
+            '라멘': '일식',
+            '소바': '일식',
+            
+            # 디저트
             '디저트': '디저트',
-            '카페': '카페',
-            '브런치': '브런치',
-            '샐러드': '샐러드',
-            '분식': '분식',
-            '찜닭': '찜닭',
-            '버거': '버거'
+            '카페': '디저트',
+            '케이크': '디저트',
+            '아이스크림': '디저트',
+            '베이커리': '디저트',
+            '빵': '디저트',
+            '브런치': '디저트'
         }
+        
+        # 표준 카테고리 (7개)
+        standard_categories = ['고기', '해산물', '양식', '한식', '중식', '일식', '디저트']
         
         mapped_categories = set()
         
@@ -356,21 +401,19 @@ class DataMigration:
             if cat and cat is not None:  # None 체크 추가
                 # 정확한 매칭
                 if cat in category_mapping:
-                    mapped_categories.add(category_mapping[cat])
+                    mapped_cat = category_mapping[cat]
+                    if mapped_cat in standard_categories:
+                        mapped_categories.add(mapped_cat)
                 # 부분 매칭
                 else:
                     for key, value in category_mapping.items():
-                        if key in cat or cat in key:
+                        if (key in cat or cat in key) and value in standard_categories:
                             mapped_categories.add(value)
                             break
         
-        # 무한리필 관련 카테고리가 있으면 '무한리필' 추가
-        if any('무한' in str(cat) or '리필' in str(cat) for cat in crawler_categories if cat):
-            mapped_categories.add('무한리필')
-        
         # 카테고리가 없으면 기본 카테고리 추가
         if not mapped_categories:
-            mapped_categories.add('무한리필')
+            mapped_categories.add('한식')
         
         return list(mapped_categories)
     
@@ -391,16 +434,16 @@ class DataMigration:
         # 2. 가게 정보 삽입
         cursor.execute("""
             INSERT INTO stores (
-                name, address, description, 
+                name, address, 
                 position_lat, position_lng, position_x, position_y,
                 naver_rating, kakao_rating, open_hours, 
                 price, refill_items, image_urls, geom
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             ) RETURNING id
         """, (
-            data['name'], data['address'], data['description'],
+            data['name'], data['address'],
             data['position_lat'], data['position_lng'], 
             data['position_x'], data['position_y'],
             data['naver_rating'], data['kakao_rating'], data['open_hours'],
