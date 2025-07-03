@@ -6,6 +6,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import sys
 import os
+import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
 import config
 
@@ -229,7 +230,7 @@ class DatabaseManager:
                     store.get('diningcode_place_id'),
                     store.get('raw_categories_diningcode', []),
                     store.get('status', '운영중'),
-                    store.get('menu_items', []),
+                    json.dumps(store.get('menu_items', []), ensure_ascii=False) if store.get('menu_items') else None,
                     store.get('menu_categories', []),
                     store.get('signature_menu', []),
                     store.get('price_range', ''),
