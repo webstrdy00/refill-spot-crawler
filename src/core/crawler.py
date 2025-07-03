@@ -1,24 +1,40 @@
+import logging
 import time
 import random
-import logging
-import os
 import re
-import json
-import urllib.parse
 from typing import List, Dict, Optional, Any
+from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from bs4 import BeautifulSoup
-import pandas as pd
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.webdriver.chrome.options import Options
+
+# config import 수정
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'config'))
-import config
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+try:
+    from config.config import USER_AGENTS, MIN_DELAY, MAX_DELAY, IMAGE_STORAGE_CONFIG
+except ImportError:
+    # 기본값 설정
+    USER_AGENTS = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    ]
+    MIN_DELAY = 1
+    MAX_DELAY = 3
+    IMAGE_STORAGE_CONFIG = {}
+
+# 이미지 매니저 import
+try:
+    from src.core.image_manager import ImageManager
+except ImportError:
+    try:
+        from .image_manager import ImageManager
+    except ImportError:
+        ImageManager = None
 
 
 # 로깅 설정
@@ -37,30 +53,40 @@ os.makedirs('data', exist_ok=True)
 
 class DiningCodeCrawler:
     def __init__(self, enable_image_download: bool = True):
-        self.driver = None
-        self.wait = None
-        self.enable_image_download = enable_image_download
+        """
+        다이닝코드 크롤러 초기화
         
-        # 이미지 매니저 초기화
-        if self.enable_image_download:
+        Args:
+            enable_image_download: 이미지 다운로드 및 Storage 업로드 활성화 여부
+        """
+        self.driver = None
+        self.current_url = ""
+        self.session_start_time = time.time()
+        
+        # 이미지 매니저 초기화 (이미지 다운로드 및 Storage 업로드)
+        self.enable_image_download = enable_image_download
+        self.image_manager = None
+        
+        if enable_image_download and ImageManager:
             try:
-                from .image_manager import ImageManager
-                self.image_manager = ImageManager()
-                logger.info("이미지 매니저 초기화 완료")
-            except ImportError:
-                try:
-                    import sys
-                    import os
-                    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-                    from core.image_manager import ImageManager
-                    self.image_manager = ImageManager()
-                    logger.info("이미지 매니저 초기화 완료")
-                except Exception as e:
-                    logger.warning(f"이미지 매니저 초기화 실패: {e}")
-                    self.image_manager = None
-                    self.enable_image_download = False
-        else:
-            self.image_manager = None
+                # config에서 이미지 스토리지 설정 가져오기
+                self.image_manager = ImageManager(config=IMAGE_STORAGE_CONFIG)
+                logger.info("이미지 매니저 초기화 완료 (스토리지 활성화)")
+            except Exception as e:
+                logger.warning(f"이미지 매니저 초기화 실패: {e}")
+                self.enable_image_download = False
+        elif enable_image_download:
+            logger.warning("ImageManager 클래스를 찾을 수 없음. 이미지 다운로드가 비활성화됩니다.")
+            self.enable_image_download = False
+        
+        # 성능 통계
+        self.stats = {
+            'total_requests': 0,
+            'successful_requests': 0,
+            'failed_requests': 0,
+            'images_processed': 0,
+            'images_uploaded': 0
+        }
         
         self.setup_driver()
         
@@ -82,7 +108,7 @@ class DiningCodeCrawler:
         chrome_options.add_argument('--page-load-strategy=normal')
         
         # User-Agent 랜덤 설정
-        user_agent = random.choice(config.USER_AGENTS)
+        user_agent = random.choice(USER_AGENTS)
         chrome_options.add_argument(f'--user-agent={user_agent}')
         
         try:
@@ -99,8 +125,8 @@ class DiningCodeCrawler:
     
     def random_delay(self, min_delay=None, max_delay=None):
         """랜덤 지연 (재시도 로직에서 사용할 수 있도록 파라미터 추가)"""
-        min_d = min_delay or config.MIN_DELAY
-        max_d = max_delay or config.MAX_DELAY
+        min_d = min_delay or MIN_DELAY
+        max_d = max_delay or MAX_DELAY
         delay = random.uniform(min_d, max_d)
         time.sleep(delay)
         
@@ -562,6 +588,20 @@ class DiningCodeCrawler:
                     if download_result.get('main_image'):
                         detail_info['main_image_local'] = download_result['main_image']
                         logger.info(f"대표 이미지 로컬 저장: {os.path.basename(download_result['main_image'])}")
+                        
+                        # Supabase Storage에 업로드
+                        try:
+                            storage_url = self.image_manager.upload_to_supabase(
+                                download_result['main_image'],
+                                detail_info.get('name', 'unknown')
+                            )
+                            if storage_url:
+                                detail_info['main_image_storage_url'] = storage_url
+                                logger.info(f"✅ Supabase Storage 업로드 성공: {storage_url}")
+                            else:
+                                logger.warning("❌ Supabase Storage 업로드 실패")
+                        except Exception as upload_error:
+                            logger.error(f"Supabase 업로드 중 오류: {upload_error}")
                     
                     # 다운로드 통계
                     stats = download_result.get('download_stats', {})
@@ -1274,44 +1314,45 @@ class DiningCodeCrawler:
         return hours_info
 
     def _extract_image_info(self, soup: BeautifulSoup) -> Dict:
-        """가게 대표 이미지 추출 (다이닝코드 구조에 맞게 최적화)"""
+        """이미지 정보 추출 및 Storage 업로드 (기존 스키마 활용)"""
         image_info = {
-            'image_urls': [],
             'main_image': '',
-            'menu_images': [],
-            'interior_images': []
+            'image_urls': []
         }
         
         try:
-            # 1. 가게 대표 이미지 추출 (페이지 상단의 큰 이미지)
-            main_image_found = False
+            logger.info("🖼️ 이미지 정보 추출 시작...")
             
-            # 방법 1: 대표 이미지 섹션에서 찾기
+            main_image_found = False
+            original_image_url = None
+            
+            # 방법 1: 특정 클래스나 ID를 가진 대표 이미지 찾기
             main_image_selectors = [
-                'img[alt*="대표"]',
-                'img[alt*="메인"]', 
-                'img[class*="main"]',
-                'img[class*="hero"]',
-                'img[class*="banner"]',
-                '.main-image img',
+                '.restaurant-image img',
+                '.main-image img', 
                 '.hero-image img',
+                '.restaurant-photo img',
+                '.poi-image img',
                 '.store-image img',
-                '.restaurant-image img'
+                '#main-image',
+                '.photo-main img',
+                'img[alt*="대표"]',
+                'img[alt*="메인"]',
+                'img[alt*="main"]'
             ]
             
             for selector in main_image_selectors:
-                main_img = soup.select_one(selector)
-                if main_img:
-                    src = main_img.get('src') or main_img.get('data-src') or main_img.get('data-lazy')
+                img_elem = soup.select_one(selector)
+                if img_elem:
+                    src = img_elem.get('src') or img_elem.get('data-src') or img_elem.get('data-lazy')
                     if src and src.startswith('http'):
-                        image_info['main_image'] = src
+                        original_image_url = src
                         main_image_found = True
                         logger.info(f"대표 이미지 발견 (방법1): {selector}")
                         break
             
             # 방법 2: 페이지 상단의 첫 번째 큰 이미지 찾기
             if not main_image_found:
-                # 큰 이미지 (보통 대표 이미지는 크기가 큼)
                 all_images = soup.find_all('img')
                 for img in all_images[:10]:  # 상위 10개 이미지만 체크
                     src = img.get('src') or img.get('data-src') or img.get('data-lazy')
@@ -1327,7 +1368,7 @@ class DiningCodeCrawler:
                             
                             if (any(keyword in alt_text for keyword in ['대표', 'main', '가게', '매장']) or
                                 any(keyword in class_name for keyword in ['main', 'hero', 'banner', 'primary'])):
-                                image_info['main_image'] = src
+                                original_image_url = src
                                 main_image_found = True
                                 logger.info(f"대표 이미지 발견 (방법2): alt='{alt_text}', class='{class_name}'")
                                 break
@@ -1335,7 +1376,6 @@ class DiningCodeCrawler:
             # 방법 3: JavaScript로 동적으로 로드된 이미지 찾기
             if not main_image_found and self.driver:
                 try:
-                    # 페이지 상단의 가장 큰 이미지 찾기
                     js_script = """
                     var images = document.querySelectorAll('img');
                     var largestImage = null;
@@ -1346,7 +1386,6 @@ class DiningCodeCrawler:
                         var rect = img.getBoundingClientRect();
                         var area = rect.width * rect.height;
                         
-                        // 화면 상단 절반에 있고, 충분히 큰 이미지
                         if (rect.top < window.innerHeight / 2 && area > 10000) {
                             var src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy');
                             if (src && src.startsWith('http') && 
@@ -1364,42 +1403,84 @@ class DiningCodeCrawler:
                     
                     js_main_image = self.driver.execute_script(js_script)
                     if js_main_image:
-                        image_info['main_image'] = js_main_image
+                        original_image_url = js_main_image
                         main_image_found = True
                         logger.info(f"대표 이미지 발견 (방법3-JS): 가장 큰 이미지")
                         
                 except Exception as js_error:
                     logger.warning(f"JavaScript 이미지 검색 실패: {js_error}")
             
-            # 방법 4: 백업 - 첫 번째 유효한 이미지 (UI 요소 제외)
+            # 방법 4: 백업 - 첫 번째 유효한 이미지
             if not main_image_found:
                 all_images = soup.find_all('img')
-                for img in all_images[:15]:  # 상위 15개 체크
+                for img in all_images[:15]:
                     src = img.get('src') or img.get('data-src') or img.get('data-lazy')
                     if src and src.startswith('http'):
-                        # UI 요소나 작은 아이콘 제외
                         if not any(keyword in src.lower() for keyword in [
                             'icon', 'logo', 'btn', 'button', 'arrow', 'close', 
                             'addphoto', 'placeholder', 'default', 'loading',
                             'common', 'ui', 'sprite'
                         ]):
-                            image_info['main_image'] = src
+                            original_image_url = src
                             main_image_found = True
                             logger.info(f"대표 이미지 발견 (방법4-백업): 첫 번째 유효 이미지")
                             break
             
-            # 2. 추가 이미지는 수집하지 않음 (대표 이미지만 수집)
-            image_info['image_urls'] = []
-            
-            if main_image_found:
-                logger.info(f"✅ 가게 대표 이미지 추출 성공")
-                logger.info(f"📸 대표 이미지: {image_info['main_image'][:100]}...")
-                logger.info(f"📸 추가 이미지: 수집 안함 (대표 이미지만)")
+            # 이미지 처리 및 Storage 업로드
+            if main_image_found and original_image_url:
+                logger.info(f"📸 원본 이미지 URL: {original_image_url[:100]}...")
+                
+                # 기본적으로 원본 URL을 저장
+                image_info['main_image'] = original_image_url
+                image_info['image_urls'] = [original_image_url]
+                
+                # 이미지 매니저가 활성화된 경우 Storage 업로드 시도
+                if self.enable_image_download and self.image_manager:
+                    try:
+                        self.stats['images_processed'] += 1
+                        
+                        # 가게명 추출 (파일명 생성용)
+                        store_name = soup.find('h1')
+                        if store_name:
+                            store_name = store_name.get_text(strip=True)
+                        else:
+                            store_name = "unknown_store"
+                        
+                        logger.info(f"🔄 이미지 다운로드 및 Storage 업로드 시작: {store_name}")
+                        
+                        # 이미지 다운로드 → 처리 → Storage 업로드
+                        result = self.image_manager.process_and_upload_image(
+                            original_image_url, 
+                            store_name
+                        )
+                        
+                        if result.get('storage_url'):
+                            # Storage URL을 main_image로 설정 (우선 사용)
+                            image_info['main_image'] = result['storage_url']
+                            # image_urls에는 원본과 Storage URL 모두 저장
+                            image_info['image_urls'] = [original_image_url, result['storage_url']]
+                            
+                            self.stats['images_uploaded'] += 1
+                            logger.info(f"✅ 이미지 Storage 업로드 성공!")
+                            logger.info(f"🔗 Storage URL: {result['storage_url']}")
+                        else:
+                            logger.warning(f"⚠️ Storage 업로드 실패: {result.get('error', '알 수 없는 오류')}")
+                            logger.info("📌 원본 URL을 사용합니다.")
+                            
+                    except Exception as upload_error:
+                        logger.error(f"이미지 업로드 처리 실패: {upload_error}")
+                        # 실패해도 원본 URL은 유지
+                
+                logger.info(f"✅ 이미지 정보 처리 완료")
+                logger.info(f"📸 최종 main_image: {image_info['main_image'][:100]}...")
+                logger.info(f"📸 image_urls 개수: {len(image_info['image_urls'])}")
             else:
                 logger.warning("❌ 가게 대표 이미지를 찾을 수 없음")
             
         except Exception as e:
             logger.error(f"이미지 정보 추출 실패: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return image_info
 
@@ -1858,11 +1939,44 @@ class DiningCodeCrawler:
         
         return address_info
     
+    def get_stats(self) -> Dict:
+        """크롤링 및 이미지 처리 통계 반환"""
+        return self.stats.copy()
+    
+    def print_stats(self):
+        """크롤링 통계 출력"""
+        print("\n📊 크롤링 통계:")
+        print(f"   전체 요청: {self.stats['total_requests']}")
+        print(f"   성공 요청: {self.stats['successful_requests']}")
+        print(f"   실패 요청: {self.stats['failed_requests']}")
+        print(f"   이미지 처리: {self.stats['images_processed']}")
+        print(f"   Storage 업로드: {self.stats['images_uploaded']}")
+        
+        if self.stats['images_processed'] > 0:
+            upload_rate = (self.stats['images_uploaded'] / self.stats['images_processed']) * 100
+            print(f"   업로드 성공률: {upload_rate:.1f}%")
+    
     def close(self):
-        """WebDriver 종료"""
+        """리소스 정리 및 통계 출력"""
         if self.driver:
-            self.driver.quit()
-            logger.info("WebDriver 종료")
+            try:
+                self.driver.quit()
+                logger.info("WebDriver 종료 완료")
+            except Exception as e:
+                logger.error(f"WebDriver 종료 중 오류: {e}")
+        
+        # 이미지 매니저 통계 출력
+        if self.image_manager:
+            try:
+                storage_stats = self.image_manager.get_storage_stats()
+                print("\n📈 이미지 저장소 통계:")
+                for key, value in storage_stats.items():
+                    print(f"   {key}: {value}")
+            except Exception as e:
+                logger.warning(f"저장소 통계 조회 실패: {e}")
+        
+        # 크롤링 통계 출력
+        self.print_stats()
 
 # 테스트 실행 함수
 def test_crawling():

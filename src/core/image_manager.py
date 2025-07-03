@@ -15,6 +15,7 @@ import io
 import re
 from datetime import datetime
 from supabase import create_client
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ class ImageManager:
         Args:
             config: 이미지 스토리지 설정 딕셔너리
         """
+        # 환경변수 로드
+        load_dotenv()
+        
         # 기본 설정
         self.config = config or {
             "enabled": True,
@@ -322,8 +326,22 @@ class ImageManager:
             if not all([supabase_url, supabase_service_key]):
                 logger.error("Supabase 환경 변수가 설정되지 않았습니다.")
                 return None
-                
-            supabase = create_client(supabase_url, supabase_service_key)
+            
+            # DNS 해결을 위한 재시도 로직
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # 매 시도마다 새로운 클라이언트 생성
+                    from supabase import create_client
+                    supabase = create_client(supabase_url, supabase_service_key)
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Supabase 클라이언트 생성 실패 (시도 {attempt + 1}/{max_retries}): {e}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        logger.error(f"Supabase 클라이언트 생성 최종 실패: {e}")
+                        return None
             
             # 파일 읽기
             if not os.path.exists(local_path):
@@ -344,34 +362,47 @@ class ImageManager:
             else:
                 filename = f"image_{timestamp}{file_ext}"
             
-            # 업로드
-            response = supabase.storage.from_(bucket_name).upload(
-                path=filename,
-                file=file_data,
-                file_options={
-                    "content-type": f"image/{file_ext[1:]}",
-                    "cache-control": "3600"
-                }
-            )
-            
-            # 공개 URL 생성
-            public_url = supabase.storage.from_(bucket_name).get_public_url(filename)
-            
-            logger.info(f"이미지 업로드 성공: {filename}")
-            logger.info(f"공개 URL: {public_url}")
-            
-            # 로컬 파일 정리 (설정에 따라)
-            if self.config.get("cleanup_after_upload", False):
+            # 업로드 (재시도 로직 포함)
+            for attempt in range(max_retries):
                 try:
-                    os.remove(local_path)
-                    logger.info(f"로컬 파일 삭제: {local_path}")
+                    response = supabase.storage.from_(bucket_name).upload(
+                        path=filename,
+                        file=file_data,
+                        file_options={
+                            "content-type": f"image/{file_ext[1:]}",
+                            "cache-control": "3600"
+                        }
+                    )
+                    
+                    # 공개 URL 생성
+                    public_url = supabase.storage.from_(bucket_name).get_public_url(filename)
+                    
+                    logger.info(f"이미지 업로드 성공: {filename}")
+                    logger.info(f"공개 URL: {public_url}")
+                    
+                    # 로컬 파일 정리 (설정에 따라)
+                    if self.config.get("cleanup_after_upload", False):
+                        try:
+                            os.remove(local_path)
+                            logger.info(f"로컬 파일 삭제: {local_path}")
+                        except Exception as e:
+                            logger.warning(f"로컬 파일 삭제 실패: {e}")
+                    
+                    self.stats['images_uploaded'] += 1
+                    return public_url
+                    
                 except Exception as e:
-                    logger.warning(f"로컬 파일 삭제 실패: {e}")
-            
-            return public_url
+                    if attempt < max_retries - 1:
+                        logger.warning(f"업로드 실패 (시도 {attempt + 1}/{max_retries}): {e}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        logger.error(f"업로드 최종 실패: {e}")
+                        self.stats['upload_failures'] += 1
+                        return None
             
         except Exception as e:
             logger.error(f"Supabase 업로드 실패: {e}")
+            self.stats['upload_failures'] += 1
             return None
 
     def download_and_process_image(self, image_url: str) -> Optional[str]:

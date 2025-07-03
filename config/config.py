@@ -27,7 +27,7 @@ SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
 
 # 이미지 스토리지 설정
 IMAGE_STORAGE_CONFIG = {
-    "enabled": os.getenv('IMAGE_STORAGE_ENABLED', 'false').lower() == 'true',
+    "enabled": os.getenv('IMAGE_STORAGE_ENABLED', 'true').lower() == 'true',
     "bucket_name": os.getenv('STORAGE_BUCKET_NAME', 'refill-spot-images'),
     "cleanup_after_upload": os.getenv('IMAGE_CLEANUP_AFTER_UPLOAD', 'false').lower() == 'true',
     "upload_timeout": int(os.getenv('IMAGE_UPLOAD_TIMEOUT', '30')),
