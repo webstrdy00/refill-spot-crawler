@@ -167,17 +167,15 @@ class DataMigration:
         return {
             'name': store['name'],
             'address': store.get('address', ''),
-            'description': self._generate_description(store),
             'position_lat': position_lat,
             'position_lng': position_lng,
             'position_x': position_x,
             'position_y': position_y,
-            'naver_rating': float(naver_rating) if naver_rating else None,
-            'kakao_rating': float(kakao_rating) if kakao_rating else None,
             'open_hours': open_hours,
-            'price': price,
+            'break_time': store.get('break_time'),
             'refill_items': refill_items,
             'image_urls': image_urls,
+            'phone_number': store.get('phone_number'),
             'categories': categories
         }
     
@@ -193,12 +191,30 @@ class DataMigration:
         return None
     
     def _process_refill_items(self, store: Dict) -> List[str]:
-        """무한리필 아이템 가공"""
+        """무한리필 아이템 가공 (menu_items에서 추출)"""
         items = []
         
-        # refill_items 필드
+        # 기존 refill_items 필드
         if store.get('refill_items'):
             items.extend(store['refill_items'])
+        
+        # menu_items에서 리필 아이템 추출 (메인 소스)
+        if store.get('menu_items'):
+            try:
+                menu_items = store['menu_items']
+                if isinstance(menu_items, str):
+                    menu_items = json.loads(menu_items)
+                
+                if isinstance(menu_items, list):
+                    for item in menu_items:
+                        if isinstance(item, dict):
+                            name = item.get('name', '')
+                            if name:
+                                items.append(name)
+                        elif isinstance(item, str):
+                            items.append(item)
+            except:
+                pass
         
         # refill_type에서 추가 정보 추출
         if store.get('refill_type'):
@@ -210,49 +226,28 @@ class DataMigration:
                 if item and item not in items:
                     items.append(item)
         
-        # 메뉴에서 무한리필 관련 아이템 추출
-        if store.get('menu_items'):
-            try:
-                menu_items = store['menu_items']
-                if isinstance(menu_items, str):
-                    menu_items = json.loads(menu_items)
-                
-                for item in menu_items:
-                    if isinstance(item, dict):
-                        name = item.get('name', '')
-                        if '무한' in name or '리필' in name:
-                            items.append(name)
-            except:
-                pass
-        
         # 중복 제거 및 정리
         return list(set(filter(None, items)))[:10]  # 최대 10개까지
     
     def _process_image_urls(self, store: Dict) -> List[str]:
-        """이미지 URL 검증 및 필터링 (대표 이미지만)"""
+        """이미지 URL 검증 및 필터링 (main_image만 사용)"""
         urls = []
         
-        # 로컬 대표 이미지 우선 사용
-        if store.get('main_image_local'):
-            urls.append(store['main_image_local'])
-            logger.info(f"로컬 대표 이미지 사용: {os.path.basename(store['main_image_local'])}")
-        elif store.get('main_image'):
+        # main_image 필드만 사용
+        if store.get('main_image'):
             urls.append(store['main_image'])
-            logger.info("원본 대표 이미지 URL 사용")
         
-        # URL 검증 및 중복 제거
+        # URL 검증
         valid_urls = []
-        seen = set()
         
         for url in urls:
-            if url and url not in seen:
+            if url:
                 # 로컬 파일 경로이거나 기본적인 URL 검증
                 if (url.startswith(('data/', 'data\\', '/')) or 
                     url.startswith(('http://', 'https://', '//'))):
                     valid_urls.append(url)
-                    seen.add(url)
         
-        return valid_urls[:1]  # 대표 이미지 1개만
+        return valid_urls  # main_image만 반환
     
     def _process_open_hours(self, store: Dict) -> Optional[str]:
         """영업시간 정보 정리"""
@@ -436,18 +431,17 @@ class DataMigration:
             INSERT INTO stores (
                 name, address, 
                 position_lat, position_lng, position_x, position_y,
-                naver_rating, kakao_rating, open_hours, 
-                price, refill_items, image_urls, geom
+                open_hours, break_time, refill_items, image_urls, phone_number, geom
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             ) RETURNING id
         """, (
             data['name'], data['address'],
             data['position_lat'], data['position_lng'], 
             data['position_x'], data['position_y'],
-            data['naver_rating'], data['kakao_rating'], data['open_hours'],
-            data['price'], data['refill_items'], data['image_urls'],
+            data['open_hours'], data['break_time'], data['refill_items'], data['image_urls'],
+            data['phone_number'],
             data['position_lng'], data['position_lat']  # geom 필드를 위한 좌표
         ))
         

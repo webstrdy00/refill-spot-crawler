@@ -26,6 +26,7 @@ venv/
 env/
 ENV/
 .cursor/
+.claude/
 data/images
 
 # IDE

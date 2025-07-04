@@ -771,23 +771,20 @@ class DiningCodeCrawler:
                 menu_info['refill_menu_items'] = browser_menu_items
                 menu_info['menu_items'] = []
                 
-                # 구조화된 메뉴 정보를 menu_items 필드에 저장
+                # 브라우저 기반 메뉴를 menu_items에도 구조화하여 저장
                 if browser_menu_items:
-                    # 기존 menu_items가 없으면 초기화
-                    if 'menu_items' not in detail_info:
-                        detail_info['menu_items'] = []
-                    
-                    # 브라우저 기반 메뉴를 menu_items에 추가
+                    # menu_items 필드에 구조화된 형태로 저장
+                    menu_info['menu_items'] = []
                     for menu_item in browser_menu_items:
                         structured_item = {
                             'name': menu_item['name'],
-                            'price': menu_item['price'],
+                            'price': menu_item['price'], 
                             'price_numeric': menu_item.get('price_numeric', 0),
                             'is_recommended': menu_item.get('is_recommended', False),
                             'type': 'browser_verified',
                             'order': menu_item.get('order', 0)
                         }
-                        detail_info['menu_items'].append(structured_item)
+                        menu_info['menu_items'].append(structured_item)
             
             # 3. 대표 메뉴 추출
             signature_menu = self._extract_signature_menu(soup)
@@ -1576,21 +1573,39 @@ class DiningCodeCrawler:
         }
         
         try:
-            # 1단계: 라스트오더 정보 추출
+            # 1단계: 라스트오더 정보 추출 (강화된 패턴)
             last_order_patterns = [
                 r'라스트\s*오더\s*[:：]?\s*(\d{1,2}:\d{2})',
                 r'라스트오더\s*[:：]?\s*(\d{1,2}:\d{2})',
                 r'L\.?O\.?\s*[:：]?\s*(\d{1,2}:\d{2})',
                 r'주문\s*마감\s*[:：]?\s*(\d{1,2}:\d{2})',
-                r'마지막\s*주문\s*[:：]?\s*(\d{1,2}:\d{2})'
+                r'마지막\s*주문\s*[:：]?\s*(\d{1,2}:\d{2})',
+                # HTML br 태그가 있는 경우
+                r'라스트오더:\s*(\d{1,2}:\d{2})',
+                r'<br>\s*라스트오더:\s*(\d{1,2}:\d{2})',
+                # 띄어쓰기나 특수문자 변형
+                r'라스트.*?오더.*?(\d{1,2}:\d{2})',
+                r'Last.*?Order.*?(\d{1,2}:\d{2})'
             ]
             
             for pattern in last_order_patterns:
-                matches = re.findall(pattern, hours_text, re.IGNORECASE)
+                matches = re.findall(pattern, hours_text, re.IGNORECASE | re.DOTALL)
                 if matches:
                     hours_info['last_order'] = matches[0]
-                    logger.info(f"라스트오더 추출: {hours_info['last_order']}")
+                    logger.info(f"✅ 라스트오더 추출: {hours_info['last_order']}")
                     break
+            
+            # 라스트오더가 없으면 토글 전 기본 영업시간에서 찾기
+            if not hours_info['last_order']:
+                logger.info("🔍 토글 전 기본 영업시간에서 라스트오더 검색...")
+                basic_hours_text = self.driver.page_source if self.driver else ""
+                
+                for pattern in last_order_patterns:
+                    matches = re.findall(pattern, basic_hours_text, re.IGNORECASE | re.DOTALL)
+                    if matches:
+                        hours_info['last_order'] = matches[0]
+                        logger.info(f"✅ 기본 영역에서 라스트오더 추출: {hours_info['last_order']}")
+                        break
             
             # 2단계: 브레이크타임 정보 추출
             break_patterns = [
@@ -1609,7 +1624,7 @@ class DiningCodeCrawler:
                     logger.info(f"브레이크타임 추출: {hours_info['break_time']}")
                     break
             
-            # 3단계: 요일별 영업시간 추출
+            # 3단계: 요일별 영업시간 추출 (개선된 방법)
             day_hours = {}
             holiday_days = []
             
@@ -1643,59 +1658,82 @@ class DiningCodeCrawler:
                 r'휴무일?\s*[:：]?\s*([월화수목금토일])요일?'
             ]
             
-            # 텍스트를 줄 단위로 분할하여 처리
-            lines = hours_text.split('\n')
+            # 방법 1: 분리된 날짜와 영업시간 매칭 (새로운 전략)
+            # 실제 구조: 날짜들이 한 블록에, 영업시간들이 다른 블록에 있음
             
-            current_day = None
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # 요일 감지 (날짜 형태에서 요일 추출)
-                date_day_match = re.search(r'\d{1,2}월\s*\d{1,2}일\s*\(([월화수목금토일])\)', line)
-                if date_day_match:
-                    current_day = date_day_match.group(1)
+            # 1-1. 날짜 정보 추출 (연속된 형태)
+            date_matches = re.findall(r'(\d{1,2})월\s*(\d{1,2})일\s*\(([월화수목금토일])\)', hours_text)
+            dates_order = [match[2] for match in date_matches]  # 요일 순서만 추출
+            
+            # 1-2. 영업시간 정보 추출 (연속된 형태)
+            hour_matches = re.findall(r'영업시간\s*[:：]?\s*(\d{1,2}:\d{2})\s*[-~]\s*(\d{1,2}:\d{2})', hours_text)
+            
+            logger.info(f"📅 추출된 날짜 순서: {dates_order}")
+            logger.info(f"⏰ 추출된 영업시간: {hour_matches}")
+            
+            # 1-3. 날짜와 영업시간 매칭
+            if dates_order and hour_matches:
+                # 모든 영업시간이 동일한 경우 (가장 일반적)
+                if len(set(hour_matches)) <= 1:
+                    common_hours = f"{hour_matches[0][0]}-{hour_matches[0][1]}"
+                    for day in dates_order:
+                        day_hours[day] = common_hours
+                        logger.info(f"✅ 공통 영업시간 적용: {day}요일 {common_hours}")
                 else:
-                    # 일반 요일 감지
-                    for day_text, day_short in day_mapping.items():
-                        if day_text in line:
-                            current_day = day_short
-                            break
+                    # 각기 다른 영업시간인 경우
+                    min_count = min(len(dates_order), len(hour_matches))
+                    for i in range(min_count):
+                        day = dates_order[i]
+                        hours_str = f"{hour_matches[i][0]}-{hour_matches[i][1]}"
+                        day_hours[day] = hours_str
+                        logger.info(f"✅ 개별 영업시간 적용: {day}요일 {hours_str}")
+            
+            # 방법 2: 기본 영업시간 추출 (토글 전 정보)
+            if not day_hours:
+                logger.info("📋 기본 영업시간 추출 시도...")
                 
-                # 휴무일 확인
-                for pattern in holiday_patterns:
-                    matches = re.findall(pattern, line)
-                    if matches:
-                        for match in matches:
-                            day = day_mapping.get(match, match)
-                            if day and day not in holiday_days:
-                                holiday_days.append(day)
-                                logger.info(f"휴무일 발견: {day}요일")
+                # "오늘(금) · 영업시간: 11:30 - 23:30" 패턴
+                today_pattern = r'오늘\s*\(([월화수목금토일])\)[^영]*?영업시간\s*[:：]?\s*(\d{1,2}:\d{2})\s*[-~]\s*(\d{1,2}:\d{2})'
+                today_match = re.search(today_pattern, hours_text)
                 
-                # 영업시간 추출
-                for pattern in hour_patterns:
-                    matches = re.findall(pattern, line)
-                    if matches and current_day:
-                        start_time, end_time = matches[0]
-                        
-                        # 시간 형식 정규화
-                        if ':' not in start_time:  # "11시" 형태
-                            start_time = f"{start_time.zfill(2)}:00"
-                        if ':' not in end_time:    # "23시" 형태
-                            end_time = f"{end_time.zfill(2)}:00"
-                        
-                        # 오전/오후 처리
-                        if '오전' in line and '오후' in line:
-                            end_hour = int(end_time.split(':')[0])
-                            if end_hour != 12:
-                                end_hour += 12
-                            end_time = f"{end_hour:02d}:{end_time.split(':')[1]}"
-                        
-                        hours_str = f"{start_time}-{end_time}"
-                        day_hours[current_day] = hours_str
-                        logger.info(f"영업시간 발견: {current_day}요일 {hours_str}")
-                        break
+                if today_match:
+                    today_day, start_time, end_time = today_match.groups()
+                    hours_str = f"{start_time}-{end_time}"
+                    
+                    # 오늘의 영업시간을 모든 요일에 적용 (기본값)
+                    all_days = ['월', '화', '수', '목', '금', '토', '일']
+                    for day in all_days:
+                        day_hours[day] = hours_str
+                        logger.info(f"✅ 기본 영업시간 적용: {day}요일 {hours_str}")
+                    
+                    logger.info(f"📋 오늘({today_day}요일) 기준 영업시간으로 전체 설정: {hours_str}")
+            
+            # 방법 3: 단순 영업시간 패턴 (최후 수단)
+            if not day_hours:
+                logger.info("🔍 단순 영업시간 패턴 검색...")
+                
+                simple_hour_matches = re.findall(r'(\d{1,2}:\d{2})\s*[-~]\s*(\d{1,2}:\d{2})', hours_text)
+                if simple_hour_matches:
+                    # 첫 번째로 발견된 시간을 모든 요일에 적용
+                    start_time, end_time = simple_hour_matches[0]
+                    hours_str = f"{start_time}-{end_time}"
+                    
+                    all_days = ['월', '화', '수', '목', '금', '토', '일']
+                    for day in all_days:
+                        day_hours[day] = hours_str
+                        logger.info(f"✅ 단순 패턴 적용: {day}요일 {hours_str}")
+                    
+                    logger.info(f"🔍 단순 패턴으로 전체 설정: {hours_str}")
+            
+            # 휴무일 확인
+            for pattern in holiday_patterns:
+                matches = re.findall(pattern, hours_text)
+                if matches:
+                    for match in matches:
+                        day = day_mapping.get(match, match)
+                        if day and day not in holiday_days:
+                            holiday_days.append(day)
+                            logger.info(f"휴무일 발견: {day}요일")
             
             # 4단계: 패턴 분석으로 누락된 요일 보완
             all_days = ['월', '화', '수', '목', '금', '토', '일']
@@ -1761,7 +1799,7 @@ class DiningCodeCrawler:
                 
                 # 라스트오더가 있으면 맨 마지막에 추가
                 if hours_info['last_order']:
-                    hours_info['open_hours'] += f" / 라스트오더: {hours_info['last_order']}"
+                    hours_info['open_hours'] += f" (라스트오더: {hours_info['last_order']})"
             
             # 6단계: 휴무일 설정
             if holiday_days:
