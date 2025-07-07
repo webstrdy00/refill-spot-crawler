@@ -102,15 +102,15 @@ class DataMigration:
                     # 데이터 가공
                     processed_data = self._process_store_data(store)
                     
-                    # 프로젝트 DB에 삽입
+                    # 프로젝트 DB에 삽입 (개별 트랜잭션)
                     self._insert_to_project_db(project_cursor, processed_data)
+                    self.project_conn.commit()  # 각 가게마다 커밋
                     success_count += 1
                     
                 except Exception as e:
                     logger.error(f"가게 마이그레이션 실패 ({store['name']}): {e}")
+                    self.project_conn.rollback()  # 실패 시 롤백
                     continue
-            
-            self.project_conn.commit()
             logger.info(f"마이그레이션 완료: {success_count}/{len(stores)}개 성공")
             
         except Exception as e:
@@ -190,15 +190,11 @@ class DataMigration:
                 return details[0]
         return None
     
-    def _process_refill_items(self, store: Dict) -> List[str]:
-        """무한리필 아이템 가공 (menu_items에서 추출)"""
+    def _process_refill_items(self, store: Dict) -> List[Dict]:
+        """무한리필 아이템 가공 - JSONB 형태로 변경 (menu_items를 그대로 복사)"""
         items = []
         
-        # 기존 refill_items 필드
-        if store.get('refill_items'):
-            items.extend(store['refill_items'])
-        
-        # menu_items에서 리필 아이템 추출 (메인 소스)
+        # 1. menu_items에서 그대로 복사 (메인 소스)
         if store.get('menu_items'):
             try:
                 menu_items = store['menu_items']
@@ -206,28 +202,80 @@ class DataMigration:
                     menu_items = json.loads(menu_items)
                 
                 if isinstance(menu_items, list):
-                    for item in menu_items:
-                        if isinstance(item, dict):
-                            name = item.get('name', '')
-                            if name:
-                                items.append(name)
-                        elif isinstance(item, str):
-                            items.append(item)
-            except:
-                pass
+                    # menu_items를 그대로 복사
+                    items = menu_items.copy()
+                    logger.info(f"menu_items에서 {len(items)}개 아이템 복사")
+                    
+            except Exception as e:
+                logger.warning(f"menu_items 파싱 실패: {e}")
         
-        # refill_type에서 추가 정보 추출
-        if store.get('refill_type'):
+        # 2. menu_items가 없으면 기존 refill_items 필드에서 추출
+        if not items and store.get('refill_items'):
+            refill_items = store['refill_items']
+            if isinstance(refill_items, list):
+                for item in refill_items:
+                    if isinstance(item, str) and item.strip():
+                        items.append({
+                            'name': item.strip(),
+                            'price': '',
+                            'price_numeric': 0,
+                            'is_recommended': False,
+                            'description': '',
+                            'type': 'refill_item',
+                            'source': 'crawler'
+                        })
+            elif isinstance(refill_items, str) and refill_items.strip():
+                items.append({
+                    'name': refill_items.strip(),
+                    'price': '',
+                    'price_numeric': 0,
+                    'is_recommended': False,
+                    'description': '',
+                    'type': 'refill_item',
+                    'source': 'crawler'
+                })
+        
+        # 3. refill_type에서 추가 정보 추출 (보조)
+        if store.get('refill_type') and not items:
             refill_type = store['refill_type']
-            # "고기 무한리필", "삼겹살 무한리필" 등에서 아이템 추출
             match = re.search(r'(.+?)\s*무한리필', refill_type)
             if match:
-                item = match.group(1).strip()
-                if item and item not in items:
-                    items.append(item)
+                item_name = match.group(1).strip()
+                if item_name:
+                    items.append({
+                        'name': item_name,
+                        'price': '',
+                        'price_numeric': 0,
+                        'is_recommended': True,
+                        'description': f"{refill_type}",
+                        'type': 'refill_type',
+                        'source': 'crawler'
+                    })
         
-        # 중복 제거 및 정리
-        return list(set(filter(None, items)))[:10]  # 최대 10개까지
+        # 4. 데이터 검증 및 정리
+        valid_items = []
+        for item in items:
+            if isinstance(item, dict) and item.get('name'):
+                # 필수 필드 보장
+                validated_item = {
+                    'name': item.get('name', ''),
+                    'price': item.get('price', ''),
+                    'price_numeric': item.get('price_numeric', 0),
+                    'is_recommended': item.get('is_recommended', False),
+                    'type': item.get('type', 'menu_item'),
+                    'order': item.get('order', 0)
+                }
+                
+                # 추가 필드가 있으면 포함
+                if 'description' in item:
+                    validated_item['description'] = item['description']
+                if 'source' in item:
+                    validated_item['source'] = item['source']
+                
+                valid_items.append(validated_item)
+        
+        logger.info(f"최종 {len(valid_items)}개 refill_items 생성")
+        return valid_items
     
     def _process_image_urls(self, store: Dict) -> List[str]:
         """이미지 URL 검증 및 필터링 (main_image만 사용)"""
@@ -426,21 +474,24 @@ class DataMigration:
             if result:
                 category_ids.append(result[0])
         
-        # 2. 가게 정보 삽입
+        # 2. 가게 정보 삽입 (refill_items를 JSONB 배열로 처리)
+        # 각 refill_item을 개별 JSONB로 변환하여 배열로 만듦
+        refill_items_jsonb_array = [json.dumps(item, ensure_ascii=False) for item in data['refill_items']]
+        
         cursor.execute("""
             INSERT INTO stores (
                 name, address, 
                 position_lat, position_lng, position_x, position_y,
                 open_hours, break_time, refill_items, image_urls, phone_number, geom
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s::text[]::jsonb[], %s, %s,
                 ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             ) RETURNING id
         """, (
             data['name'], data['address'],
             data['position_lat'], data['position_lng'], 
             data['position_x'], data['position_y'],
-            data['open_hours'], data['break_time'], data['refill_items'], data['image_urls'],
+            data['open_hours'], data['break_time'], refill_items_jsonb_array, data['image_urls'],
             data['phone_number'],
             data['position_lng'], data['position_lat']  # geom 필드를 위한 좌표
         ))

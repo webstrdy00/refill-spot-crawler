@@ -79,6 +79,8 @@ class SupabaseMigration:
                 AND s.position_lng IS NOT NULL
                 AND s.position_lat BETWEEN 37.4 AND 37.7
                 AND s.position_lng BETWEEN 126.8 AND 127.2
+                AND s.name IS NOT NULL
+                AND s.address IS NOT NULL
                 ORDER BY s.created_at DESC
             """
             
@@ -107,11 +109,26 @@ class SupabaseMigration:
             if not name or not address:
                 raise ValueError("가게명 또는 주소가 없습니다")
             
-            # 위치 정보 처리
-            position_lat = float(store['position_lat'])
-            position_lng = float(store['position_lng'])
-            position_x = float(store.get('position_x', position_lng))
-            position_y = float(store.get('position_y', position_lat))
+            # 위치 정보 처리 - None 값 체크
+            position_lat = store.get('position_lat')
+            position_lng = store.get('position_lng')
+            
+            if position_lat is None or position_lng is None:
+                raise ValueError("위도 또는 경도가 없습니다")
+            
+            try:
+                position_lat = float(position_lat)
+                position_lng = float(position_lng)
+                
+                # position_x, position_y가 None인 경우 기본값 사용
+                position_x_raw = store.get('position_x')
+                position_y_raw = store.get('position_y')
+                
+                position_x = float(position_x_raw) if position_x_raw is not None else position_lng
+                position_y = float(position_y_raw) if position_y_raw is not None else position_lat
+                
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"좌표 변환 실패: {e}")
             
             # 서울시 범위 검증
             if not (37.4 <= position_lat <= 37.7 and 126.8 <= position_lng <= 127.2):
@@ -158,33 +175,92 @@ class SupabaseMigration:
         
         return None
     
-    def _process_refill_items(self, store: Dict) -> List[str]:
-        """무한리필 아이템 가공"""
-        items = set()
+    def _process_refill_items(self, store: Dict) -> List[Dict]:
+        """무한리필 아이템 가공 - menu_items를 그대로 refill_items로 복사"""
+        items = []
         
-        # 기존 refill_items 필드
-        if store.get('refill_items'):
-            if isinstance(store['refill_items'], list):
-                items.update(store['refill_items'])
-            elif isinstance(store['refill_items'], str):
-                items.add(store['refill_items'])
+        # 1. menu_items에서 그대로 복사 (메인 소스)
+        if store.get('menu_items'):
+            try:
+                menu_items = store['menu_items']
+                if isinstance(menu_items, str):
+                    menu_items = json.loads(menu_items)
+                
+                if isinstance(menu_items, list):
+                    # menu_items를 그대로 복사
+                    items = menu_items.copy()
+                    logger.info(f"menu_items에서 {len(items)}개 아이템 복사")
+                    
+            except Exception as e:
+                logger.warning(f"menu_items 파싱 실패: {e}")
         
-        # refill_type에서 추출
-        if store.get('refill_type'):
+        # 2. menu_items가 없으면 기존 refill_items 필드에서 추출
+        if not items and store.get('refill_items'):
+            refill_items = store['refill_items']
+            if isinstance(refill_items, list):
+                for item in refill_items:
+                    if isinstance(item, str) and item.strip():
+                        items.append({
+                            'name': item.strip(),
+                            'price': '',
+                            'price_numeric': 0,
+                            'is_recommended': False,
+                            'description': '',
+                            'type': 'refill_item',
+                            'source': 'crawler'
+                        })
+            elif isinstance(refill_items, str) and refill_items.strip():
+                items.append({
+                    'name': refill_items.strip(),
+                    'price': '',
+                    'price_numeric': 0,
+                    'is_recommended': False,
+                    'description': '',
+                    'type': 'refill_item',
+                    'source': 'crawler'
+                })
+        
+        # 3. refill_type에서 추가 정보 추출 (보조)
+        if store.get('refill_type') and not items:
             refill_type = store['refill_type']
             match = re.search(r'(.+?)\s*무한리필', refill_type)
             if match:
-                item = match.group(1).strip()
-                if item:
-                    items.add(item)
+                item_name = match.group(1).strip()
+                if item_name:
+                    items.append({
+                        'name': item_name,
+                        'price': '',
+                        'price_numeric': 0,
+                        'is_recommended': True,
+                        'description': f"{refill_type}",
+                        'type': 'refill_type',
+                        'source': 'crawler'
+                    })
         
-        # 정리 및 필터링
-        filtered_items = []
+        # 4. 데이터 검증 및 정리
+        valid_items = []
         for item in items:
-            if item and len(item.strip()) > 0:
-                filtered_items.append(item.strip())
+            if isinstance(item, dict) and item.get('name'):
+                # 필수 필드 보장
+                validated_item = {
+                    'name': item.get('name', ''),
+                    'price': item.get('price', ''),
+                    'price_numeric': item.get('price_numeric', 0),
+                    'is_recommended': item.get('is_recommended', False),
+                    'type': item.get('type', 'menu_item'),
+                    'order': item.get('order', 0)
+                }
+                
+                # 추가 필드가 있으면 포함
+                if 'description' in item:
+                    validated_item['description'] = item['description']
+                if 'source' in item:
+                    validated_item['source'] = item['source']
+                
+                valid_items.append(validated_item)
         
-        return filtered_items[:10]
+        logger.info(f"최종 {len(valid_items)}개 refill_items 생성")
+        return valid_items
     
     def _process_image_urls(self, store: Dict) -> List[str]:
         """이미지 URL 검증 및 필터링 (대표 이미지만)"""
@@ -308,7 +384,10 @@ INSERT INTO categories (name) VALUES ('{category}') ON CONFLICT (name) DO NOTHIN
                         sql_statements.append(category_sql)
                     
                     # 가게 삽입 SQL
-                    refill_items_array = "ARRAY[" + ",".join([f"'{item.replace("'", "''")}'" for item in processed_data['refill_items']]) + "]"
+                    # refill_items를 JSONB로 처리
+                    refill_items_json = json.dumps(processed_data['refill_items'], ensure_ascii=False)
+                    refill_items_jsonb = f"'{refill_items_json.replace("'", "''")}'"
+                    
                     image_urls_array = "ARRAY[" + ",".join([f"'{url.replace("'", "''")}'" for url in processed_data['image_urls']]) + "]"
                     
                     store_sql = f"""
@@ -329,7 +408,7 @@ INSERT INTO stores (
     {processed_data['kakao_rating'] if processed_data['kakao_rating'] else 'NULL'},
     {f"'{processed_data['open_hours'].replace("'", "''")}'" if processed_data['open_hours'] else 'NULL'},
     {f"'{processed_data['price'].replace("'", "''")}'" if processed_data['price'] else 'NULL'},
-    {refill_items_array},
+    {refill_items_jsonb}::jsonb,
     {image_urls_array}
 );"""
                     sql_statements.append(store_sql)
